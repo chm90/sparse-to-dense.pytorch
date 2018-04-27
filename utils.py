@@ -5,9 +5,7 @@ from PIL import Image
 cmap = plt.cm.jet
 
 def merge_into_row(input, target, depth_pred):
-    print(input.shape)
     rgb = input[:, :3, :, :] #if input.shape[1] == 4 else input
-    #print(input.shape)
     rgb = 255 * np.transpose(np.squeeze(rgb.cpu().numpy()), (1,2,0))
     depth = np.squeeze(target.cpu().numpy())
     depth = (depth - np.min(depth)) / (np.max(depth) - np.min(depth))
@@ -16,9 +14,6 @@ def merge_into_row(input, target, depth_pred):
     pred = (pred - np.min(pred)) / (np.max(pred) - np.min(pred))
     pred = 255 * cmap(pred)[:, :, :3]  # H, W, C
     ims = [rgb, depth, pred]
-    print("depth.shape =",depth.shape)
-    print("rgb.shape =",rgb.shape)
-    print("pred.shape =",pred.shape)
     if input.shape[1] == 4:
         d = np.squeeze(input[:, 3, :, :].cpu().numpy())
         d = np.ma.masked_where(d == 0,d)
