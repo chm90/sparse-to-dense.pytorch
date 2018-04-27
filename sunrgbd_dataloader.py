@@ -222,7 +222,7 @@ class SUNRGBDDataset(Dataset):
             [image, depth]) if self.square_provider is not no_square else image
         square_input = torch.from_numpy(np.array(square_input))
         square_output = torch.from_numpy(np.array(square_output))
-        return feature, depth_bfx#, square_input, square_output
+        return feature, depth_bfx, square_input, square_output
 
     def _scale_square(self, square):
         x_min, x_max, y_min, y_max = square
