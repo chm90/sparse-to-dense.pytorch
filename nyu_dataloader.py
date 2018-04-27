@@ -2,6 +2,7 @@ import os
 import os.path
 import numpy as np
 import torch.utils.data as data
+import torch
 import h5py
 import transforms
 from sunrgbd_dataloader import center_square, apply_square
@@ -116,13 +117,15 @@ class NYUDataset(data.Dataset):
                  num_samples=0,
                  loader=h5_loader,
                  square_width=0):
+        self.input_size = (oheight,owidth)
+        self.output_size = self.input_size
         classes, class_to_idx = find_classes(root)
         imgs = make_dataset(root, class_to_idx)
         if len(imgs) == 0:
             raise (RuntimeError(
                 "Found 0 images in subfolders of: " + root + "\n"
                 "Supported image extensions are: " + ",".join(IMG_EXTENSIONS)))
-
+        self.output_squares = root == "val"
         self.root = root
         self.imgs = imgs
         self.classes = classes
@@ -159,14 +162,14 @@ class NYUDataset(data.Dataset):
         #mask_keep = np.random.uniform(0, 1, depth.shape) < prob
         #depth_subsampled[mask_keep] = depth[mask_keep]
 
-        return depth_subsampled
+        return depth_subsampled, square
 
     def create_rgbd(self, rgb, depth, num_samples, square_width):
-        sparse_depth = self.create_subsampled_depth(depth, num_samples,
-                                                    square_width)
+        sparse_depth, square = self.create_subsampled_depth(
+            depth, num_samples, square_width)
         # rgbd = np.dstack((rgb[:,:,0], rgb[:,:,1], rgb[:,:,2], sparse_depth))
         rgbd = np.append(rgb, np.expand_dims(sparse_depth, axis=2), axis=2)
-        return rgbd
+        return rgbd, square
 
     def __getraw__(self, index):
         """
@@ -200,20 +203,21 @@ class NYUDataset(data.Dataset):
 
         if self.modality == 'rgb':
             input_np = rgb_np
+            square = (0, 0, 0, 0)
         elif self.modality == 'rgbd':
-            input_np = self.create_rgbd(rgb_np, depth_np, self.num_samples,
-                                        self.square_width)
+            input_np, square = self.create_rgbd(
+                rgb_np, depth_np, self.num_samples, self.square_width)
         elif self.modality == 'd':
-            input_np = self.create_subsampled_depth(depth_np, self.num_samples,
-                                                    self.square_width)
+            input_np, square = self.create_subsampled_depth(
+                depth_np, self.num_samples, self.square_width)
 
         input_tensor = to_tensor(input_np)
         while input_tensor.dim() < 3:
             input_tensor = input_tensor.unsqueeze(0)
         depth_tensor = to_tensor(depth_np)
         depth_tensor = depth_tensor.unsqueeze(0)
-
-        return input_tensor, depth_tensor, input_np, depth_np
+        square_tensor = torch.from_numpy(np.array(square))
+        return input_tensor, depth_tensor, input_np, depth_np, square_tensor
 
     def __getitem__(self, index):
         """
@@ -223,9 +227,9 @@ class NYUDataset(data.Dataset):
         Returns:
             tuple: (input_tensor, depth_tensor) 
         """
-        input_tensor, depth_tensor, input_np, depth_np = self.__get_all_item__(
+        input_tensor, depth_tensor, input_np, depth_np, square_tensor = self.__get_all_item__(
             index)
-        return input_tensor, depth_tensor
+        return input_tensor, depth_tensor, square_tensor, square_tensor
 
     def __len__(self):
         return len(self.imgs)
