@@ -4,14 +4,14 @@ import shutil
 import time
 import sys
 import csv
-
+from sys import stdout
 import torch
 import torch.nn as nn
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
-
+import evaluate
 from nyu_dataloader import NYUDataset
 from sunrgbd_dataloader import SUNRGBDDataset
 from models import Decoder, ResNet
@@ -347,7 +347,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
     model.train()
 
     end = time.time()
-    for i, (input, target) in enumerate(train_loader):
+    for i, (input, target, _, _) in enumerate(train_loader):
 
         input, target = input.cuda(), target.cuda()
         input_var = torch.autograd.Variable(input)
@@ -374,15 +374,15 @@ def train(train_loader, model, criterion, optimizer, epoch):
         end = time.time()
 
         if (i + 1) % args.print_freq == 0:
-            print('=> output: {}'.format(output_directory))
-            print('Train Epoch: {0} [{1}/{2}]\t'
+            #print('=> output: {}'.format(output_directory))
+            stdout.write('Train Epoch: {0} [{1}/{2}]\t'
                   't_Data={data_time:.3f}({average.data_time:.3f}) '
                   't_GPU={gpu_time:.3f}({average.gpu_time:.3f}) '
                   'RMSE={result.rmse:.2f}({average.rmse:.2f}) '
                   'MAE={result.mae:.2f}({average.mae:.2f}) '
                   'Delta1={result.delta1:.3f}({average.delta1:.3f}) '
                   'REL={result.absrel:.3f}({average.absrel:.3f}) '
-                  'Lg10={result.lg10:.3f}({average.lg10:.3f}) '.format(
+                  'Lg10={result.lg10:.3f}({average.lg10:.3f}) \r'.format(
                       epoch,
                       i + 1,
                       len(train_loader),
@@ -413,9 +413,9 @@ def validate(val_loader, model, epoch, write_to_file=True):
 
     # switch to evaluate mode
     model.eval()
-
+    evaluator = evaluate.Evaluator(val_loader.dataset.output_size)
     end = time.time()
-    for i, (input, target) in enumerate(val_loader):
+    for i, (input, target,square_input,square_output) in enumerate(val_loader):
         input, target = input.cuda(), target.cuda()
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
@@ -425,6 +425,7 @@ def validate(val_loader, model, epoch, write_to_file=True):
         # compute output
         end = time.time()
         depth_pred = model(input_var)
+        evaluator.add_results(depth_pred,target,square_output)
         torch.cuda.synchronize()
         gpu_time = time.time() - end
 
@@ -490,7 +491,9 @@ def validate(val_loader, model, epoch, write_to_file=True):
                 'data_time': avg.data_time,
                 'gpu_time': avg.gpu_time
             })
-
+        evaluator.save_plot(os.path.join(output_directory,f"evaluation_epoch{epoch}.png"))
+    else:
+        evaluator.plot()
     return avg, img_merge
 
 
