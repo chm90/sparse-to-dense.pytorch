@@ -168,7 +168,10 @@ parser.add_argument(
     help=f"The optimizer to use, one of {optimizers} (default: adam)",
     default="adam")
 parser.add_argument(
-    "--output-dir", "-o", help="directory where to place results (default: results)",default="results")
+    "--output-dir",
+    "-o",
+    help="directory where to place results (default: results)",
+    default="results")
 
 fieldnames = [
     'mse', 'rmse', 'absrel', 'lg10', 'mae', 'delta1', 'delta2', 'delta3',
@@ -189,7 +192,8 @@ def main():
 
     # create results folder, if not already exists
     output_directory = os.path.join(
-        args.output_dir, f'{args.data}.modality={args.modality}.arch={args.arch}'
+        args.output_dir,
+        f'{args.data}.modality={args.modality}.arch={args.arch}'
         f'.skip={args.skip_type}.decoder={args.decoder}'
         f'.criterion={args.criterion}.lr={args.lr}.bs={args.batch_size}'
         f'.opt={args.optimizer}')
@@ -502,51 +506,46 @@ def validate(val_loader, model, epoch, write_to_file=True):
                 filename = output_directory + '/comparison_' + str(
                     epoch) + '.png'
                 utils.save_image(img_merge, filename)
-
+        average = average_meter.average()
         if (i + 1) % args.print_freq == 0:
-            print('Test: [{0}/{1}]\t'
+            print(f'Test: [{i + 1}/{len(val_loader)}]\t'
                   't_GPU={gpu_time:.3f}({average.gpu_time:.3f})\t'
                   'RMSE={result.rmse:.2f}({average.rmse:.2f}) '
                   'MAE={result.mae:.2f}({average.mae:.2f}) '
                   'Delta1={result.delta1:.3f}({average.delta1:.3f}) '
                   'REL={result.absrel:.3f}({average.absrel:.3f}) '
-                  'Lg10={result.lg10:.3f}({average.lg10:.3f}) '.format(
-                      i + 1,
-                      len(val_loader),
-                      gpu_time=gpu_time,
-                      result=result,
-                      average=average_meter.average()))
+                  'Lg10={result.lg10:.3f}({average.lg10:.3f}) ')
 
-    avg = average_meter.average()
-
-    print('\n*\n'
+    average = average_meter.average()
+    time = average.gpu_time
+    print(f'\n*\n'
           'RMSE={average.rmse:.3f}\n'
           'MAE={average.mae:.3f}\n'
           'Delta1={average.delta1:.3f}\n'
           'REL={average.absrel:.3f}\n'
           'Lg10={average.lg10:.3f}\n'
-          't_GPU={time:.3f}\n'.format(average=avg, time=avg.gpu_time))
+          't_GPU={time:.3f}\n')
 
     if write_to_file:
         with open(test_csv, 'a') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writerow({
-                'mse': avg.mse,
-                'rmse': avg.rmse,
-                'absrel': avg.absrel,
-                'lg10': avg.lg10,
-                'mae': avg.mae,
-                'delta1': avg.delta1,
-                'delta2': avg.delta2,
-                'delta3': avg.delta3,
-                'data_time': avg.data_time,
-                'gpu_time': avg.gpu_time
+                'mse': average.mse,
+                'rmse': average.rmse,
+                'absrel': average.absrel,
+                'lg10': average.lg10,
+                'mae': average.mae,
+                'delta1': average.delta1,
+                'delta2': average.delta2,
+                'delta3': average.delta3,
+                'data_time': average.data_time,
+                'gpu_time': average.gpu_time
             })
         evaluator.save_plot(
             os.path.join(output_directory, f"evaluation_epoch{epoch}.png"))
     else:
         evaluator.plot()
-    return avg, img_merge
+    return average, img_merge
 
 
 def save_checkpoint(state, is_best, epoch):
@@ -561,6 +560,7 @@ def save_checkpoint(state, is_best, epoch):
             output_directory, 'checkpoint-' + str(epoch - 1) + '.pth.tar')
         if os.path.exists(prev_checkpoint_filename):
             os.remove(prev_checkpoint_filename)
+
 
 def adjust_learning_rate(optimizer, epoch):
     """Sets the learning rate to the initial LR decayed by 10 every 5 epochs"""
