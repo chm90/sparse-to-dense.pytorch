@@ -99,7 +99,6 @@ def error_statistics_at_distance(
     upper_bound = distance_edges[j + 1]
     #errors_in_bin: List[List[float]] = [[0.0]]
     first_item_idx = 0
-    print("entering loop")
     error_means = np.empty((n_bins, ))
     error_stds = np.empty((n_bins, ))
     error_medians = np.empty((n_bins, ))
@@ -111,9 +110,6 @@ def error_statistics_at_distance(
 
     errors_in_bin_j = np.zeros((n_items, ))
     n_errors_in_bin_j = 0
-    print(errors.shape)
-    print(n_items)
-    print(errors_in_bin_j.shape)
     #raise Exception("asdasd")
     for i in range(first_item_idx, n_items):
         distance, error = distances[i], errors[i]
@@ -135,7 +131,6 @@ def error_statistics_at_distance(
             n_errors_in_bin_j = 0
             lower_bound = distance_edges[j]
             upper_bound = distance_edges[j + 1]
-    print("evaluation completed\n distance =",distance,"distance_max =",distance_max)
 
 #    else:
 # if we did reach the end without breaking,
@@ -165,7 +160,7 @@ class Evaluator(object):
 
     def draw_plots(self):
         distances = np.array(self._distances).flatten()
-        errors = np.array(self._errors).flatten()
+        errors = np.array(self._errors).flatten() 
         plot_labels = ["mean", "meadian"]
         with plt.xkcd():
             h, xedges, yedges, ax = plt.hist2d(
