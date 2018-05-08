@@ -13,18 +13,20 @@ import torch.optim
 import torch.utils.data
 import evaluate
 from nyu_dataloader import NYUDataset
-from sunrgbd_dataloader import SUNRGBDDataset
-from models import Decoder, ResNet
+from sunrgbd_dataloader import SUNRGBDDataset, inverse_apply_uniform_square_batch
+from models import Decoder, ResNet, SKIP_TYPES
 from metrics import AverageMeter, Result
 import criteria
 import utils
+from my_model import RGBDRGB
 
-model_names = ['resnet18', 'resnet50']
+model_names = ['resnet18', 'resnet50', 'my_resnet18']
 loss_names = ['l1', 'l2']
-data_names = ['NYUDataset', "SUNRGBD"]
+data_names = ['nyudepthv2', "SUNRGBD"]
 decoder_names = Decoder.names
 modality_names = NYUDataset.modality_names
 depth_sampling_types = ["sparse", "square"]
+optimizers = ["sgd", "adam"]
 cudnn.benchmark = True
 
 parser = argparse.ArgumentParser(description='Sparse-to-Dense Training')
@@ -81,10 +83,10 @@ parser.add_argument(
     help='number of data loading workers (default: 10)')
 parser.add_argument(
     '--epochs',
-    default=15,
+    default=100,
     type=int,
     metavar='N',
-    help='number of total epochs to run (default: 15)')
+    help='maximum number of total epochs to run (default: 15)')
 parser.add_argument(
     '--start-epoch',
     default=0,
@@ -145,6 +147,28 @@ parser.add_argument(
     action='store_true',
     default=True,
     help='use ImageNet pre-trained weights (default: True)')
+parser.add_argument(
+    "--skip-type",
+    "-st",
+    choices=SKIP_TYPES,
+    default="none",
+    help="the type of skip connection to use (default: none)")
+
+parser.add_argument(
+    "--early-stop-epochs",
+    "-ese",
+    type=int,
+    default=10,
+    help="Epochs with non improving validation error before stoping")
+
+parser.add_argument(
+    "--optimizer",
+    "-opt",
+    choices=optimizers,
+    help=f"The optimizer to use, one of {optimizers} (default: adam)",
+    default="adam")
+parser.add_argument(
+    "--output-dir", "-o", help="directory where to place results (default: results)",default="results")
 
 fieldnames = [
     'mse', 'rmse', 'absrel', 'lg10', 'mae', 'delta1', 'delta2', 'delta3',
@@ -158,19 +182,23 @@ def main():
     global args, best_result, output_directory, train_csv, test_csv
     args = parser.parse_args()
     dataset = args.data
-    args.data = os.path.join(os.environ["DATASET_DIR"], args.data)
     if args.modality == 'rgb' and args.num_samples != 0:
         print("number of samples is forced to be 0 when input modality is rgb")
         args.num_samples = 0
+    image_shape = (192, 256)  # if "my" in args.arch else (228, 304)
 
     # create results folder, if not already exists
     output_directory = os.path.join(
-        'results',
-        '{}.modality={}.nsample={}.arch={}.decoder={}.criterion={}.lr={}.bs={}'.
-        format(args.data,args.modality, args.num_samples, args.arch, args.decoder,
-               args.criterion, args.lr, args.batch_size))
+        args.output_dir, f'{args.data}.modality={args.modality}.arch={args.arch}'
+        f'.skip={args.skip_type}.decoder={args.decoder}'
+        f'.criterion={args.criterion}.lr={args.lr}.bs={args.batch_size}'
+        f'.opt={args.optimizer}')
+    args.data = os.path.join(os.environ["DATASET_DIR"], args.data)
+    print("output directory :", output_directory)
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
+    else:
+        raise Exception("output directory allready exists")
     train_csv = os.path.join(output_directory, 'train.csv')
     test_csv = os.path.join(output_directory, 'test.csv')
     best_txt = os.path.join(output_directory, 'best.txt')
@@ -181,7 +209,6 @@ def main():
     elif args.criterion == 'l1':
         criterion = criteria.MaskedL1Loss().cuda()
     out_channels = 1
-
     # Data loading code
     print("=> creating data loaders ...")
     traindir = os.path.join(args.data, 'train')
@@ -193,16 +220,16 @@ def main():
             traindir,
             type="train",
             modality=args.modality,
-            input_size=(228, 304),
-            output_size=(228, 304)
-        )
+            output_shape=image_shape)
     else:
         train_dataset = NYUDataset(
             traindir,
             type='train',
             modality=args.modality,
             num_samples=args.num_samples,
-            square_width=50)
+            square_width=50,
+            output_shape=image_shape)
+
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -210,23 +237,20 @@ def main():
         num_workers=args.workers,
         pin_memory=True,
         sampler=None)
-    print("len(train_dataset) =",len(train_dataset))
+    print("len(train_dataset) =", len(train_dataset))
     if dataset == "SUNRGBD":
-    # set batch size to be 1 for validation
+        # set batch size to be 1 for validation
         val_dataset = SUNRGBDDataset(
-            valdir,
-            type="val",
-            modality=args.modality,
-            output_size=(228, 304),
-            input_size=(228, 304))
+            valdir, type="val", modality=args.modality)
     else:
         val_dataset = NYUDataset(
             valdir,
             type='val',
             modality=args.modality,
             num_samples=args.num_samples,
-            square_width=50)
-        
+            square_width=50,
+            output_shape=image_shape)
+
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=1,
@@ -279,21 +303,38 @@ def main():
                 decoder=args.decoder,
                 in_channels=in_channels,
                 out_channels=out_channels,
-                pretrained=args.pretrained)
+                pretrained=args.pretrained,
+                image_shape=image_shape,
+                skip_type=args.skip_type)
         elif args.arch == 'resnet18':
             model = ResNet(
                 layers=18,
                 decoder=args.decoder,
                 in_channels=in_channels,
                 out_channels=out_channels,
-                pretrained=args.pretrained)
+                pretrained=args.pretrained,
+                image_shape=image_shape,
+                skip_type=args.skip_type)
+        elif args.arch == 'my_resnet18':
+            model = RGBDRGB(image_shape, batch_size=args.batch_size)
+            assert args.modality == "rgbd"
+            assert args.skip_connection, "RGBDRGB only supports using skipp connections"
+
         print("=> model created.")
 
-        optimizer = torch.optim.SGD(
-            model.parameters(),
-            args.lr,
-            momentum=args.momentum,
-            weight_decay=args.weight_decay)
+        adjusting_learning_rate = False
+        if args.optimizer == "sgd":
+            optimizer = torch.optim.SGD(
+                model.parameters(),
+                args.lr,
+                momentum=args.momentum,
+                weight_decay=args.weight_decay)
+        elif args.optimizer == "adam":
+            optimizer = torch.optim.Adam(
+                model.parameters(), weight_decay=args.weight_decay)
+            adjusting_learning_rate = True
+        else:
+            raise Exception("We should never be here")
 
         # create new csv files with only header
         with open(train_csv, 'w') as csvfile:
@@ -307,9 +348,10 @@ def main():
     model = model.cuda()
     print(model)
     print("=> model transferred to GPU.")
-
+    epochs_since_best = 0
     for epoch in range(args.start_epoch, args.epochs):
-        adjust_learning_rate(optimizer, epoch)
+        if adjusting_learning_rate:
+            adjust_learning_rate(optimizer, epoch)
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch)
@@ -320,6 +362,7 @@ def main():
         # remember best rmse and save checkpoint
         is_best = result.rmse < best_result.rmse
         if is_best:
+            epochs_since_best = 0
             best_result = result
             with open(best_txt, 'w') as txtfile:
                 txtfile.write(
@@ -330,6 +373,8 @@ def main():
             if img_merge is not None:
                 img_filename = output_directory + '/comparison_best.png'
                 utils.save_image(img_merge, img_filename)
+        else:
+            epochs_since_best += 1
 
         save_checkpoint({
             'epoch': epoch,
@@ -339,6 +384,10 @@ def main():
             'optimizer': optimizer,
         }, is_best, epoch)
 
+        if epochs_since_best > args.early_stop_epochs:
+            print("early stopping")
+            break
+
 
 def train(train_loader, model, criterion, optimizer, epoch):
     average_meter = AverageMeter()
@@ -347,8 +396,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
     model.train()
 
     end = time.time()
-    for i, (input, target, _, _) in enumerate(train_loader):
-
+    for i, (input, target, input_square,
+            output_square) in enumerate(train_loader):
         input, target = input.cuda(), target.cuda()
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
@@ -358,6 +407,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
         # compute depth_pred
         end = time.time()
         depth_pred = model(input_var)
+        #inverse_apply_uniform_square_batch(output_square,depth_pred)
+        #inverse_apply_uniform_square_batch(output_square,target_var)
         loss = criterion(depth_pred, target_var)
         optimizer.zero_grad()
         loss.backward()  # compute gradient and do SGD step
@@ -375,22 +426,22 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         if (i + 1) % args.print_freq == 0:
             #print('=> output: {}'.format(output_directory))
-            stdout.write('Train Epoch: {0} [{1}/{2}]\t'
-                  't_Data={data_time:.3f}({average.data_time:.3f}) '
-                  't_GPU={gpu_time:.3f}({average.gpu_time:.3f}) '
-                  'RMSE={result.rmse:.2f}({average.rmse:.2f}) '
-                  'MAE={result.mae:.2f}({average.mae:.2f}) '
-                  'Delta1={result.delta1:.3f}({average.delta1:.3f}) '
-                  'REL={result.absrel:.3f}({average.absrel:.3f}) '
-                  'Lg10={result.lg10:.3f}({average.lg10:.3f}) \r'.format(
-                      epoch,
-                      i + 1,
-                      len(train_loader),
-                      data_time=data_time,
-                      gpu_time=gpu_time,
-                      result=result,
-                      average=average_meter.average()))
-
+            stdout.write(
+                'Train Epoch: {0} [{1}/{2}]\t'
+                't_Data={data_time:.3f}({average.data_time:.3f}) '
+                't_GPU={gpu_time:.3f}({average.gpu_time:.3f}) '
+                'RMSE={result.rmse:.2f}({average.rmse:.2f}) '
+                'MAE={result.mae:.2f}({average.mae:.2f}) '
+                'Delta1={result.delta1:.3f}({average.delta1:.3f}) '
+                'REL={result.absrel:.3f}({average.absrel:.3f}) '
+                'Lg10={result.lg10:.3f}({average.lg10:.3f}) \n'.format(
+                    epoch,
+                    i + 1,
+                    len(train_loader),
+                    data_time=data_time,
+                    gpu_time=gpu_time,
+                    result=result,
+                    average=average_meter.average()))
     avg = average_meter.average()
     with open(train_csv, 'a') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -413,9 +464,10 @@ def validate(val_loader, model, epoch, write_to_file=True):
 
     # switch to evaluate mode
     model.eval()
-    evaluator = evaluate.Evaluator(val_loader.dataset.output_size)
+    evaluator = evaluate.Evaluator(val_loader.dataset.output_shape)
     end = time.time()
-    for i, (input, target,square_input,square_output) in enumerate(val_loader):
+    for i, (input, target, square_input,
+            square_output) in enumerate(val_loader):
         input, target = input.cuda(), target.cuda()
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
@@ -425,10 +477,9 @@ def validate(val_loader, model, epoch, write_to_file=True):
         # compute output
         end = time.time()
         depth_pred = model(input_var)
-        evaluator.add_results(depth_pred,target,square_output)
+        evaluator.add_results(depth_pred, target, square_output)
         torch.cuda.synchronize()
         gpu_time = time.time() - end
-
         # measure accuracy and record loss
         result = Result()
         output1 = torch.index_select(depth_pred.data, 1,
@@ -491,7 +542,8 @@ def validate(val_loader, model, epoch, write_to_file=True):
                 'data_time': avg.data_time,
                 'gpu_time': avg.gpu_time
             })
-        evaluator.save_plot(os.path.join(output_directory,f"evaluation_epoch{epoch}.png"))
+        evaluator.save_plot(
+            os.path.join(output_directory, f"evaluation_epoch{epoch}.png"))
     else:
         evaluator.plot()
     return avg, img_merge
@@ -509,7 +561,6 @@ def save_checkpoint(state, is_best, epoch):
             output_directory, 'checkpoint-' + str(epoch - 1) + '.pth.tar')
         if os.path.exists(prev_checkpoint_filename):
             os.remove(prev_checkpoint_filename)
-
 
 def adjust_learning_rate(optimizer, epoch):
     """Sets the learning rate to the initial LR decayed by 10 every 5 epochs"""

@@ -57,47 +57,7 @@ oheight, owidth = 228, 304  # image size after pre-processing
 color_jitter = transforms.ColorJitter(0.4, 0.4, 0.4)
 
 
-def train_transform(rgb, depth):
-    s = np.random.uniform(1.0, 1.5)  # random scaling
-    # print("scale factor s={}".format(s))
-    depth_np = depth / s
-    angle = np.random.uniform(-5.0, 5.0)  # random rotation degrees
-    do_flip = np.random.uniform(0.0, 1.0) < 0.5  # random horizontal flip
 
-    # perform 1st part of data augmentation
-    transform = transforms.Compose([
-        transforms.Resize(
-            250.0 / iheight
-        ),  # this is for computational efficiency, since rotation is very slow
-        transforms.Rotate(angle),
-        transforms.Resize(s),
-        transforms.CenterCrop((oheight, owidth)),
-        transforms.HorizontalFlip(do_flip)
-    ])
-    rgb_np = transform(rgb)
-
-    # random color jittering
-    rgb_np = color_jitter(rgb_np)
-
-    rgb_np = np.asfarray(rgb_np, dtype='float') / 255
-    depth_np = transform(depth_np)
-
-    return rgb_np, depth_np
-
-
-def val_transform(rgb, depth):
-    depth_np = depth
-
-    # perform 1st part of data augmentation
-    transform = transforms.Compose([
-        transforms.Resize(240.0 / iheight),
-        transforms.CenterCrop((oheight, owidth)),
-    ])
-    rgb_np = transform(rgb)
-    rgb_np = np.asfarray(rgb_np, dtype='float') / 255
-    depth_np = transform(depth_np)
-
-    return rgb_np, depth_np
 
 
 def rgb2grayscale(rgb):
@@ -116,9 +76,8 @@ class NYUDataset(data.Dataset):
                  modality='rgb',
                  num_samples=0,
                  loader=h5_loader,
-                 square_width=0):
-        self.input_size = (oheight,owidth)
-        self.output_size = self.input_size
+                 square_width=0,
+                 output_shape=(oheight,owidth)):
         classes, class_to_idx = find_classes(root)
         imgs = make_dataset(root, class_to_idx)
         if len(imgs) == 0:
@@ -130,10 +89,11 @@ class NYUDataset(data.Dataset):
         self.imgs = imgs
         self.classes = classes
         self.class_to_idx = class_to_idx
+        self.oheight, self.owidth = output_shape
         if type == 'train':
-            self.transform = train_transform
+            self.transform = self.train_transform
         elif type == 'val':
-            self.transform = val_transform
+            self.transform = self.val_transform
         else:
             raise (RuntimeError("Invalid dataset type: " + type + "\n"
                                 "Supported dataset types are: train, val"))
@@ -150,6 +110,51 @@ class NYUDataset(data.Dataset):
             raise (RuntimeError("Invalid modality type: " + modality + "\n"
                                 "Supported dataset types are: " +
                                 ''.join(self.modality_names)))
+
+    @property
+    def output_shape(self):
+        return self.oheight,self.owidth
+
+    def train_transform(self,rgb, depth):
+        s = np.random.uniform(1.0, 1.5)  # random scaling
+        # print("scale factor s={}".format(s))
+        depth_np = depth / s
+        angle = np.random.uniform(-5.0, 5.0)  # random rotation degrees
+        do_flip = np.random.uniform(0.0, 1.0) < 0.5  # random horizontal flip
+        # perform 1st part of data augmentation
+        transform = transforms.Compose([
+            transforms.Resize(
+                250.0 / iheight
+            ),  # this is for computational efficiency, since rotation is very slow
+            transforms.Rotate(angle),
+            transforms.Resize(s),
+            transforms.CenterCrop((self.oheight, self.owidth)),
+            transforms.HorizontalFlip(do_flip)
+        ])
+        rgb_np = transform(rgb)
+
+        # random color jittering
+        rgb_np = color_jitter(rgb_np)
+
+        rgb_np = np.asfarray(rgb_np, dtype='float') / 255
+        depth_np = transform(depth_np)
+
+        return rgb_np, depth_np
+
+
+    def val_transform(self,rgb, depth):
+        depth_np = depth
+
+        # perform 1st part of data augmentation
+        transform = transforms.Compose([
+            transforms.Resize(240.0 / iheight),
+            transforms.CenterCrop((self.oheight, self.owidth)),
+        ])
+        rgb_np = transform(rgb)
+        rgb_np = np.asfarray(rgb_np, dtype='float') / 255
+        depth_np = transform(depth_np)
+        return rgb_np, depth_np
+
 
     def create_subsampled_depth(self, depth, num_samples, square_width):
         depth_subsampled = depth.copy()
@@ -168,6 +173,7 @@ class NYUDataset(data.Dataset):
         sparse_depth, square = self.create_subsampled_depth(
             depth, num_samples, square_width)
         # rgbd = np.dstack((rgb[:,:,0], rgb[:,:,1], rgb[:,:,2], sparse_depth))
+        
         rgbd = np.append(rgb, np.expand_dims(sparse_depth, axis=2), axis=2)
         return rgbd, square
 
@@ -191,6 +197,7 @@ class NYUDataset(data.Dataset):
         Returns:
             tuple: (input_tensor, depth_tensor, input_np, depth_np) 
         """
+        
         rgb, depth = self.__getraw__(index)
         if self.transform is not None:
             rgb_np, depth_np = self.transform(rgb, depth)
