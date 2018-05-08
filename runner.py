@@ -9,7 +9,8 @@ from pprint import pprint
 parser = ArgumentParser(
     description="run network(main.py) with arguments specified by a csv")
 parser.add_argument(
-    "a",
+    "run_spec",
+    metavar="RUN-SPEC-CSV",
     type=str,
     help=
     "path to csv containing arguments names in the first row and various argument values in subsequent rows"
@@ -18,15 +19,18 @@ parser.add_argument(
     "--gpus",
     type=int,
     nargs="+",
+    metavar="N",
     help="indexes of gpus to use for training (default 0)",
     default=[1])
 parser.add_argument(
     "--procs-per-gpu",
+    metavar="N",
     type=int,
     help="number of processes to run on each gpu(default 2)",
     default=2)
 
 output_dir = "output"
+
 
 def start_proc(gpu, arg_names, arg_values):
     #start new process
@@ -36,13 +40,12 @@ def start_proc(gpu, arg_names, arg_values):
         chain.from_iterable(zip(arg_names, arg_values)))
     if not os.path.isdir(output_dir):
         os.makedirs(output_dir)
-    fn_base = os.path.join(output_dir,".".join(arg_values))
+    fn_base = os.path.join(output_dir, ".".join(arg_values))
     out_fn = os.path.join(fn_base + ".out.txt")
     #err_fn = os.path.join(fn_base + ".err.txt")
-    out_file = open(out_fn,"w")
-    err_file = out_file#open(err_fn,"w")
-    proc = subprocess.Popen(
-        args_, env=env, stdout=out_file, stderr=err_file)
+    out_file = open(out_fn, "w")
+    err_file = out_file  #open(err_fn,"w")
+    proc = subprocess.Popen(args_, env=env, stdout=out_file, stderr=err_file)
     print("training started at pid", proc.pid)
     return proc
 
@@ -50,9 +53,9 @@ def start_proc(gpu, arg_names, arg_values):
 def main():
     args = parser.parse_args()
     gpu_procs = {gpu: [] for gpu in args.gpus}
-    with open(args.a) as csv_args:
+    with open(args.run_spec) as csv_args:
         runs = csv.reader(csv_args, skipinitialspace=True)
-        arg_names = list(map(str.strip,runs.__next__()))
+        arg_names = list(map(str.strip, runs.__next__()))
         arg_values = runs.__next__()
         while arg_values is not None or any(
                 len(procs) > 0 for procs in gpu_procs.values()):
@@ -67,7 +70,8 @@ def main():
                         procs.remove(proc)
                 #Start new processes if there are more arguments and there is room in the gpu
                 if len(procs) < args.procs_per_gpu and arg_values is not None:
-                    proc = start_proc(gpu, arg_names, list(map(str.strip,arg_values)))
+                    proc = start_proc(gpu, arg_names,
+                                      list(map(str.strip, arg_values)))
                     procs.append(proc)
                     try:
                         arg_values = runs.__next__()
