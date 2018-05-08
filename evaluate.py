@@ -10,6 +10,7 @@ from sunrgbd_dataloader import square_providers_by_name, no_square
 import torch
 #   from utils import load_checkpoint, epochs_iteratior
 
+
 @njit
 def compute_errors_and_distances(error_maps,
                                  squares_outputs) -> Tuple[np.array, np.array]:
@@ -88,7 +89,6 @@ def error_statistics_at_distance(
     n_items = len(distances)
     n_bins = len(distance_edges) - 1
     distance_min, distance_max = distance_edges[0], distance_edges[-1]
-    print("sorting")
     sort_idxs = distances.argsort()
     distances = distances[sort_idxs]
     errors = errors[sort_idxs]
@@ -122,10 +122,9 @@ def error_statistics_at_distance(
             errors_in_bin_j[n_errors_in_bin_j] = error
             n_errors_in_bin_j += 1
         else:
-            print("looping, item =", i, ", bin =", j)
             # is above upper bound
             errors_in_bin_j_tmp = errors_in_bin_j[:n_errors_in_bin_j]
-            error_means[j] = sqrt((errors_in_bin_j_tmp **2).mean())
+            error_means[j] = sqrt((errors_in_bin_j_tmp**2).mean())
             error_stds[j] = errors_in_bin_j_tmp.std()
             error_medians[j] = np.median(errors_in_bin_j_tmp)
             #check if we are at the end
@@ -136,7 +135,7 @@ def error_statistics_at_distance(
             n_errors_in_bin_j = 0
             lower_bound = distance_edges[j]
             upper_bound = distance_edges[j + 1]
-
+    print("evaluation completed\n distance =",distance,"distance_max =",distance_max)
 
 #    else:
 # if we did reach the end without breaking,
@@ -147,6 +146,7 @@ def error_statistics_at_distance(
     assert len(error_means) == n_bins
     assert len(error_means) == len(error_stds)
     return error_means, error_stds, error_medians
+
 
 class Evaluator(object):
     def __init__(self, output_size):
@@ -166,12 +166,8 @@ class Evaluator(object):
     def draw_plots(self):
         distances = np.array(self._distances).flatten()
         errors = np.array(self._errors).flatten()
-
-        print("errors.shape =", errors.shape)
-        print("distance.shape", distances.shape)
         plot_labels = ["mean", "meadian"]
         with plt.xkcd():
-            print("calling hist2d ...")
             h, xedges, yedges, ax = plt.hist2d(
                 distances,
                 errors,
@@ -180,8 +176,6 @@ class Evaluator(object):
                 normed=True)
             error_means, error_stds, error_median = error_statistics_at_distance(
                 distances, errors, xedges)
-            print("len(error_means) =",len(error_means))
-            print("len(error_median) =",len(error_median))
             plt.plot(xedges[1:], error_means)
             plt.plot(xedges[1:], error_median)
             plot_labels = ["mean", "meadian"]
