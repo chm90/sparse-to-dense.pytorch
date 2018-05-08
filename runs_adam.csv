@@ -1,0 +1,7 @@
+--arch, --modality, --decoder, --skip-type
+resnet18, rgbd, deconv3, none
+resnet18, rgbd, deconv3, cat
+resnet18, rgbd, deconv3, sum
+resnet18, rgb, deconv3, none
+resnet18, rgb, deconv3, cat
+resnet18, rgb, deconv3, sum 

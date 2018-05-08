@@ -1,0 +1,3 @@
+--arch, --modality, --decoder, --skip-type, --optimizer
+resnet18, rgbd, deconv3, none, sgd
+resnet18, rgb, deconv3, none, sgd
