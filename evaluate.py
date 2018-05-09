@@ -4,15 +4,15 @@ matplotlib.use("agg")
 from matplotlib import pyplot as plt
 from typing import Tuple
 import numpy as np
-from numba import njit, float64, types
+from numba import njit, float64, types, bool_,int64, float32
 from sys import stdout
 from sunrgbd_dataloader import square_providers_by_name, no_square
 import torch
 #   from utils import load_checkpoint, epochs_iteratior
 
 
-@njit
-def compute_errors_and_distances(error_maps,
+@njit(types.Tuple((float64[:],float64[:]))(float32[:,:,:,:],bool_[:,:,:,:],int64[:,:]))
+def compute_errors_and_distances(error_maps, valid_masks,
                                  squares_outputs) -> Tuple[np.array, np.array]:
     errors = np.zeros((error_maps.shape[1:]))
     distances = np.zeros((error_maps.shape[1:]))
@@ -20,7 +20,7 @@ def compute_errors_and_distances(error_maps,
     im_width, im_height = error_maps[0, 0].shape
     n = squares_outputs.shape[0]
     for i in range(n):
-        square, error_map = squares_outputs[i], error_maps[i]
+        square, error_map, valid_mask = squares_outputs[i], error_maps[i], valid_masks[i]
         if compute_dist_map:
             distance_map = np.zeros((im_width, im_height))
         for x in range(im_width):
@@ -31,7 +31,8 @@ def compute_errors_and_distances(error_maps,
                 right_of_square = xmax < x
                 above_square = y < ymin
                 below_square = ymax < y
-
+                
+                #Compute distance
                 if not (above_square or below_square or left_of_square
                         or right_of_square):
                     # inside square
@@ -68,14 +69,16 @@ def compute_errors_and_distances(error_maps,
                 error = error_map[0, x, y]
                 distances[i, x, y] = distance
                 assert distance >= 0
-                errors[i, x, y] = error
+                assert errors[i, x, y] == 0
+                errors[i, x, y] = error if valid_mask[0,x,y] else np.nan
+                if np.isnan(errors[i, x, y]):
+                    print("wasnan")
 
     return errors.flatten(), distances.flatten()
     #fig = plt.figure()
     #cax = plt.imshow(distance_map)
     #fig.colorbar(cax)
     #plt.show(
-
 
 @njit(
     types.Tuple((float64[:], float64[:], float64[:]))(float64[:], float64[:],
@@ -132,6 +135,7 @@ def error_statistics_at_distance(
             lower_bound = distance_edges[j]
             upper_bound = distance_edges[j + 1]
 
+
 #    else:
 # if we did reach the end without breaking,
 # we need to fill upp the remaining part of errors_in_bin list
@@ -150,18 +154,22 @@ class Evaluator(object):
         self.output_size = output_size
 
     def add_results(self, outputs, labels, squares_output):
+        valid_mask = (labels > 0).cpu().numpy().astype(bool)
         error_maps = torch.abs(outputs.data - labels).cpu().numpy()
         squares_output = squares_output.cpu().numpy()
 
         errors, distances = compute_errors_and_distances(
-            error_maps, squares_output)
+            error_maps, valid_mask, squares_output)
+        print("errors.shape =",errors.shape)
+        print("error_maps.shape =",error_maps.shape)
         self._errors.append(errors)
         self._distances.append(distances)
 
     def draw_plots(self):
         distances = np.array(self._distances).flatten()
-        errors = np.array(self._errors).flatten() 
+        errors = np.array(self._errors).flatten()
         plot_labels = ["mean", "meadian"]
+        print("errors rmse =",sqrt(np.mean(errors ** 2)))
         with plt.xkcd():
             h, xedges, yedges, ax = plt.hist2d(
                 distances,

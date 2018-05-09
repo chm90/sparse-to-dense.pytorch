@@ -174,8 +174,8 @@ parser.add_argument(
     default="results")
 
 fieldnames = [
-    'mse', 'rmse', 'absrel', 'lg10', 'mae', 'delta1', 'delta2', 'delta3',
-    'data_time', 'gpu_time'
+    'mse', 'rmse', 'rmse_inside', 'rmse_outside', 'absrel', 'lg10', 'mae',
+    'delta1', 'delta2', 'delta3', 'data_time', 'gpu_time'
 ]
 best_result = Result()
 best_result.set_to_worst()
@@ -201,7 +201,7 @@ def main():
     print("output directory :", output_directory)
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
-    else:
+    elif not args.evaluate:
         raise Exception("output directory allready exists")
     train_csv = os.path.join(output_directory, 'train.csv')
     test_csv = os.path.join(output_directory, 'test.csv')
@@ -361,7 +361,7 @@ def main():
         train(train_loader, model, criterion, optimizer, epoch)
 
         # evaluate on validation set
-        result, img_merge = validate(val_loader, model, epoch)
+        result,result_inside, result_outside, img_merge = validate(val_loader, model, epoch)
 
         # remember best rmse and save checkpoint
         is_best = result.rmse < best_result.rmse
@@ -370,8 +370,8 @@ def main():
             best_result = result
             with open(best_txt, 'w') as txtfile:
                 txtfile.write(
-                    "epoch={}\nmse={:.3f}\nrmse={:.3f}\nabsrel={:.3f}\nlg10={:.3f}\nmae={:.3f}\ndelta1={:.3f}\nt_gpu={:.4f}\n".
-                    format(epoch, result.mse, result.rmse, result.absrel,
+                    "epoch={}\nmse={:.3f}\nrmse={:.3f}\nrmse_inside={:.3f}\nrmse_outside={:.3f}\nabsrel={:.3f}\nlg10={:.3f}\nmae={:.3f}\ndelta1={:.3f}\nt_gpu={:.4f}\n".
+                    format(epoch, result.mse, result.rmse,result_inside.rmse,result_outside.rmse,result.absrel,
                            result.lg10, result.mae, result.delta1,
                            result.gpu_time))
             if img_merge is not None:
@@ -395,6 +395,8 @@ def main():
 
 def train(train_loader, model, criterion, optimizer, epoch):
     average_meter = AverageMeter()
+    inside_average_meter = AverageMeter()
+    outside_average_meter = AverageMeter()
 
     # switch to train mode
     model.train()
@@ -407,7 +409,6 @@ def train(train_loader, model, criterion, optimizer, epoch):
         target_var = torch.autograd.Variable(target)
         torch.cuda.synchronize()
         data_time = time.time() - end
-
         # compute depth_pred
         end = time.time()
         depth_pred = model(input_var)
@@ -424,34 +425,58 @@ def train(train_loader, model, criterion, optimizer, epoch):
         result = Result()
         output1 = torch.index_select(depth_pred.data, 1,
                                      torch.cuda.LongTensor([0]))
+        #assume all squares are of same size
+        x_min, x_max, y_min, y_max = output_square[0]
+        mask_inside = (slice(None), slice(None), slice(x_min, x_max),
+                       slice(y_min, y_max))
+        mask_outside = torch.ones_like(output1).byte()
+        try:
+            mask_outside[mask_inside] = False
+        except ValueError:
+            pass
+        result_inside = Result(mask=mask_inside)
+        result_outside = Result(mask=mask_outside)
         result.evaluate(output1, target)
+        result_inside.evaluate(output1, target)
+        result_outside.evaluate(output1, target)
         average_meter.update(result, gpu_time, data_time, input.size(0))
+        inside_average_meter.update(result_inside, gpu_time, data_time,
+                                    input.size(0))
+        outside_average_meter.update(result_outside, gpu_time, data_time,
+                                     input.size(0))
         end = time.time()
 
         if (i + 1) % args.print_freq == 0:
             #print('=> output: {}'.format(output_directory))
-            stdout.write(
-                'Train Epoch: {0} [{1}/{2}]\t'
-                't_Data={data_time:.3f}({average.data_time:.3f}) '
-                't_GPU={gpu_time:.3f}({average.gpu_time:.3f}) '
-                'RMSE={result.rmse:.2f}({average.rmse:.2f}) '
-                'MAE={result.mae:.2f}({average.mae:.2f}) '
-                'Delta1={result.delta1:.3f}({average.delta1:.3f}) '
-                'REL={result.absrel:.3f}({average.absrel:.3f}) '
-                'Lg10={result.lg10:.3f}({average.lg10:.3f}) \n'.format(
-                    epoch,
-                    i + 1,
-                    len(train_loader),
-                    data_time=data_time,
-                    gpu_time=gpu_time,
-                    result=result,
-                    average=average_meter.average()))
+            def print_result(result, result_name, averege_meter):
+                average = averege_meter.average()
+                stdout.write(
+                    f"{result_name}: "
+                    f'Train Epoch: {epoch} [{i + 1}/{len(train_loader)}]\t'
+                    #f't_Data={data_time:.3f}({average.data_time:.3f}) '
+                    #f't_GPU={gpu_time:.3f}({average.gpu_time:.3f}) '
+                    f'RMSE={result.rmse:.2f}({average.rmse:.2f}) '
+                    f'MAE={result.mae:.2f}({average.mae:.2f}) '
+                    f'Delta1={result.delta1:.3f}({average.delta1:.3f}) '
+                    #f'REL={result.absrel:.3f}({average.absrel:.3f}) '
+                    #f'Lg10={result.lg10:.3f}({average.lg10:.3f}) \n'
+                    '\n')
+
+            print_result(result, "result", average_meter)
+            print_result(result_inside, "result_inside", inside_average_meter)
+            print_result(result_outside, "result_outside",
+                         outside_average_meter)
+        break #debug
     avg = average_meter.average()
+    avg_inside = inside_average_meter.average()
+    avg_outside = outside_average_meter.average()
     with open(train_csv, 'a') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writerow({
             'mse': avg.mse,
             'rmse': avg.rmse,
+            'rmse_inside': avg_inside.rmse,
+            'rmse_outside': avg_outside.rmse,
             'absrel': avg.absrel,
             'lg10': avg.lg10,
             'mae': avg.mae,
@@ -465,6 +490,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
 def validate(val_loader, model, epoch, write_to_file=True):
     average_meter = AverageMeter()
+    inside_average_meter = AverageMeter()
+    outside_average_meter = AverageMeter()
 
     # switch to evaluate mode
     model.eval()
@@ -488,10 +515,26 @@ def validate(val_loader, model, epoch, write_to_file=True):
         result = Result()
         output1 = torch.index_select(depth_pred.data, 1,
                                      torch.cuda.LongTensor([0]))
+        #assume all squares are of same size
+        x_min, x_max, y_min, y_max = square_output[0]
+        mask_inside = (slice(None), slice(None), slice(x_min, x_max),
+                       slice(y_min, y_max))
+        mask_outside = torch.ones_like(output1).byte()
+        try:
+            mask_outside[mask_inside] = False
+        except ValueError:
+            pass
+        result_inside = Result(mask=mask_inside)
+        result_outside = Result(mask=mask_outside)
         result.evaluate(output1, target)
+        result_inside.evaluate(output1, target)
+        result_outside.evaluate(output1, target)
         average_meter.update(result, gpu_time, data_time, input.size(0))
+        inside_average_meter.update(result_inside, gpu_time, data_time,
+                                    input.size(0))
+        outside_average_meter.update(result_outside, gpu_time, data_time,
+                                     input.size(0))
         end = time.time()
-
         # save 8 images for visualization
         skip = 50
         if args.modality == 'd':
@@ -508,23 +551,39 @@ def validate(val_loader, model, epoch, write_to_file=True):
                 utils.save_image(img_merge, filename)
         average = average_meter.average()
         if (i + 1) % args.print_freq == 0:
-            print(f'Test: [{i + 1}/{len(val_loader)}]\t'
-                  't_GPU={gpu_time:.3f}({average.gpu_time:.3f})\t'
-                  'RMSE={result.rmse:.2f}({average.rmse:.2f}) '
-                  'MAE={result.mae:.2f}({average.mae:.2f}) '
-                  'Delta1={result.delta1:.3f}({average.delta1:.3f}) '
-                  'REL={result.absrel:.3f}({average.absrel:.3f}) '
-                  'Lg10={result.lg10:.3f}({average.lg10:.3f}) ')
+            #print('=> output: {}'.format(output_directory))
+            def print_result(result, result_name, averege_meter):
+                average = averege_meter.average()
+                stdout.write(
+                    f"{result_name}: "
+                    f'Train Epoch: {epoch} [{i + 1}/{len(val_loader)}]\t'
+                    #f't_Data={data_time:.3f}({average.data_time:.3f}) '
+                    #f't_GPU={gpu_time:.3f}({average.gpu_time:.3f}) '
+                    f'RMSE={result.rmse:.2f}({average.rmse:.2f}) '
+                    f'MAE={result.mae:.2f}({average.mae:.2f}) '
+                    f'Delta1={result.delta1:.3f}({average.delta1:.3f}) '
+                    #f'REL={result.absrel:.3f}({average.absrel:.3f}) '
+                    #f'Lg10={result.lg10:.3f}({average.lg10:.3f}) \n'
+                    '\n')
+
+            print_result(result, "result", average_meter)
+            print_result(result_inside, "result_inside", inside_average_meter)
+            print_result(result_outside, "result_outside",
+                         outside_average_meter)
 
     average = average_meter.average()
+    average_inside = inside_average_meter.average()
+    average_outside = outside_average_meter.average()
     gpu_time = average.gpu_time
     print(f'\n*\n'
-          'RMSE={average.rmse:.3f}\n'
-          'MAE={average.mae:.3f}\n'
-          'Delta1={average.delta1:.3f}\n'
-          'REL={average.absrel:.3f}\n'
-          'Lg10={average.lg10:.3f}\n'
-          't_GPU={gpu_time:.3f}\n')
+          f'RMSE={average.rmse:.3f}\n'
+          f'RMSE_INSIDE={average_inside.rmse:.3f}\n'
+          f'RMSE_OUTSIDE={average_outside.rmse:.3f}\n'
+          f'MAE={average.mae:.3f}\n'
+          f'Delta1={average.delta1:.3f}\n'
+          f'REL={average.absrel:.3f}\n'
+          f'Lg10={average.lg10:.3f}\n'
+          f't_GPU={gpu_time:.3f}\n')
 
     if write_to_file:
         with open(test_csv, 'a') as csvfile:
@@ -532,6 +591,8 @@ def validate(val_loader, model, epoch, write_to_file=True):
             writer.writerow({
                 'mse': average.mse,
                 'rmse': average.rmse,
+                'rmse_inside': average_inside.rmse,
+                'rmse_outside': average_outside.rmse,
                 'absrel': average.absrel,
                 'lg10': average.lg10,
                 'mae': average.mae,
@@ -544,8 +605,9 @@ def validate(val_loader, model, epoch, write_to_file=True):
         evaluator.save_plot(
             os.path.join(output_directory, f"evaluation_epoch{epoch}.png"))
     else:
-        evaluator.plot()
-    return average, img_merge
+        evaluator.save_plot("evaluation.png")
+        print("saved plot to evaluation")
+    return average, average_inside, average_outside, img_merge
 
 
 def save_checkpoint(state, is_best, epoch):

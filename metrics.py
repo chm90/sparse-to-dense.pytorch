@@ -2,17 +2,20 @@ import torch
 import math
 import numpy as np
 
+
 def log10(x):
     """Convert a new tensor with the base-10 logarithm of the elements of x. """
     return torch.log(x) / math.log(10)
 
+
 class Result(object):
-    def __init__(self):
+    def __init__(self, mask=Ellipsis):
         self.irmse, self.imae = 0, 0
         self.mse, self.rmse, self.mae = 0, 0, 0
         self.absrel, self.lg10 = 0, 0
         self.delta1, self.delta2, self.delta3 = 0, 0, 0
         self.data_time, self.gpu_time = 0, 0
+        self.mask = mask
 
     def set_to_worst(self):
         self.irmse, self.imae = np.inf, np.inf
@@ -21,7 +24,8 @@ class Result(object):
         self.delta1, self.delta2, self.delta3 = 0, 0, 0
         self.data_time, self.gpu_time = 0, 0
 
-    def update(self, irmse, imae, mse, rmse, mae, absrel, lg10, delta1, delta2, delta3, gpu_time, data_time):
+    def update(self, irmse, imae, mse, rmse, mae, absrel, lg10, delta1, delta2,
+               delta3, gpu_time, data_time):
         self.irmse, self.imae = irmse, imae
         self.mse, self.rmse, self.mae = mse, rmse, mae
         self.absrel, self.lg10 = absrel, lg10
@@ -29,7 +33,12 @@ class Result(object):
         self.data_time, self.gpu_time = data_time, gpu_time
 
     def evaluate(self, output, target):
-        valid_mask = target>0
+        try:
+            output = output[self.mask]
+            target = target[self.mask]
+        except ValueError:
+            pass
+        valid_mask = target > 0
         output = output[valid_mask]
         target = target[valid_mask]
 
@@ -43,8 +52,8 @@ class Result(object):
 
         maxRatio = torch.max(output / target, target / output)
         self.delta1 = (maxRatio < 1.25).float().mean()
-        self.delta2 = (maxRatio < 1.25 ** 2).float().mean()
-        self.delta3 = (maxRatio < 1.25 ** 3).float().mean()
+        self.delta2 = (maxRatio < 1.25**2).float().mean()
+        self.delta3 = (maxRatio < 1.25**3).float().mean()
         self.data_time = 0
         self.gpu_time = 0
 
@@ -71,25 +80,26 @@ class AverageMeter(object):
     def update(self, result, gpu_time, data_time, n=1):
         self.count += n
 
-        self.sum_irmse += n*result.irmse
-        self.sum_imae += n*result.imae
-        self.sum_mse += n*result.mse
-        self.sum_rmse += n*result.rmse
-        self.sum_mae += n*result.mae
-        self.sum_absrel += n*result.absrel
-        self.sum_lg10 += n*result.lg10
-        self.sum_delta1 += n*result.delta1
-        self.sum_delta2 += n*result.delta2
-        self.sum_delta3 += n*result.delta3
-        self.sum_data_time += n*data_time
-        self.sum_gpu_time += n*gpu_time
+        self.sum_irmse += n * result.irmse
+        self.sum_imae += n * result.imae
+        self.sum_mse += n * result.mse
+        self.sum_rmse += n * result.rmse
+        self.sum_mae += n * result.mae
+        self.sum_absrel += n * result.absrel
+        self.sum_lg10 += n * result.lg10
+        self.sum_delta1 += n * result.delta1
+        self.sum_delta2 += n * result.delta2
+        self.sum_delta3 += n * result.delta3
+        self.sum_data_time += n * data_time
+        self.sum_gpu_time += n * gpu_time
 
     def average(self):
         avg = Result()
-        avg.update(
-            self.sum_irmse / self.count, self.sum_imae / self.count,
-            self.sum_mse / self.count, self.sum_rmse / self.count, self.sum_mae / self.count, 
-            self.sum_absrel / self.count, self.sum_lg10 / self.count,
-            self.sum_delta1 / self.count, self.sum_delta2 / self.count, self.sum_delta3 / self.count,
-            self.sum_gpu_time / self.count, self.sum_data_time / self.count)
+        avg.update(self.sum_irmse / self.count, self.sum_imae / self.count,
+                   self.sum_mse / self.count, self.sum_rmse / self.count,
+                   self.sum_mae / self.count, self.sum_absrel / self.count,
+                   self.sum_lg10 / self.count, self.sum_delta1 / self.count,
+                   self.sum_delta2 / self.count, self.sum_delta3 / self.count,
+                   self.sum_gpu_time / self.count,
+                   self.sum_data_time / self.count)
         return avg

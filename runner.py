@@ -1,11 +1,13 @@
-from argparse import ArgumentParser
+from argparse import ArgumentParser, FileType
 import csv
 import subprocess
 import os
 import time
 from itertools import chain
 import sys
-from pprint import pprint
+import smtplib
+from email.mime.text import MIMEText
+import base64
 parser = ArgumentParser(
     description="run network(main.py) with arguments specified by a csv")
 parser.add_argument(
@@ -14,6 +16,17 @@ parser.add_argument(
     type=str,
     help=
     "path to csv containing arguments names in the first row and various argument values in subsequent rows"
+)
+parser.add_argument(
+    "--user-name",
+    metavar="OUTLOOK-USER-NAME",
+    type=str,
+    help="your outlook email address for sending status messeges on"
+)
+parser.add_argument(
+    "-pf",
+    metavar="FILE-NAME",
+    type=FileType(),
 )
 parser.add_argument(
     "--gpus",
@@ -46,13 +59,37 @@ def start_proc(gpu, arg_names, arg_values):
     out_file = open(out_fn, "w")
     err_file = out_file  #open(err_fn,"w")
     proc = subprocess.Popen(args_, env=env, stdout=out_file, stderr=err_file)
-    print("training started at pid", proc.pid)
+    print("training started at pid", proc.pid,"with args:\n",args_)
     return proc
 
+class SMTPEmailClient(object):
+    def __init__(self,
+                 user_name: str,
+                 hash: str,
+                 server_name: str = "smtp-mail.outlook.com",
+                 server_port: int = 587) -> None:
+        server = smtplib.SMTP(server_name, server_port)
+        self.user_name = user_name
+        self.hash = hash
+        self.server = server
+
+        #Make sure that we can login
+        self.server.starttls()
+        self.server.login(self.user_name, base64.b64decode(self.hash).decode("utf-8"))
+
+    def send(self,to_email: str, subject: str,
+             msg_text: str) -> None:
+        msg = MIMEText(msg_text)
+        msg["SUBJECT"] = subject
+        msg["FROM"] = self.user_name
+        msg["TO"] = to_email
+        self.server.login(self.user_name, base64.b64decode(self.hash).decode("utf-8"))
+        self.server.send_message(msg)
 
 def main():
     args = parser.parse_args()
     gpu_procs = {gpu: [] for gpu in args.gpus}
+    email_client = SMTPEmailClient(args.user_name,args.pf.readline())
     with open(args.run_spec) as csv_args:
         runs = csv.reader(csv_args, skipinitialspace=True)
         arg_names = list(map(str.strip, runs.__next__()))
@@ -64,8 +101,13 @@ def main():
                 for proc in procs.copy():
                     exit_code = proc.poll()
                     if exit_code is not None:
-                        print("process", proc.pid, "exited with code",
-                              exit_code)
+                        msg = f"process {proc.pid} ,called with args\n{proc.args}\nexited with code {exit_code}"
+                        subject = f"{proc.pid} exited with code {exit_code}"
+                        try:
+                            email_client.send(args.user_name,subject,msg)
+                        except smtplib.SMTPHeloError as e:
+                            print("Not able to send email, exception was:",e)
+                        print(msg)
                         #remove_old_process
                         procs.remove(proc)
                 #Start new processes if there are more arguments and there is room in the gpu
