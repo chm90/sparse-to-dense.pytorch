@@ -2,186 +2,167 @@ from math import sqrt
 import matplotlib
 matplotlib.use("agg")
 from matplotlib import pyplot as plt
-from typing import Tuple
 import numpy as np
-from numba import njit, float64, types, bool_,int64, float32
-from sys import stdout
-from sunrgbd_dataloader import square_providers_by_name, no_square
-import torch
-#   from utils import load_checkpoint, epochs_iteratior
+from numba import njit, float64, types, int64, float32
+from sunrgbd_dataloader import center_square
+
+pointT = types.UniTuple(float64, 2)
+rangeT = types.UniTuple(float64, 2)
+squareT = types.UniTuple(float64, 4)
+shapeT = types.UniTuple(int64, 2)
+imagesT = float32[:, :, :]
 
 
-@njit(types.Tuple((float64[:],float64[:]))(float32[:,:,:,:],bool_[:,:,:,:],int64[:,:]))
-def compute_errors_and_distances(error_maps, valid_masks,
-                                 squares_outputs) -> Tuple[np.array, np.array]:
-    errors = np.zeros((error_maps.shape[1:]))
-    distances = np.zeros((error_maps.shape[1:]))
-    compute_dist_map = False
-    im_width, im_height = error_maps[0, 0].shape
-    n = squares_outputs.shape[0]
-    for i in range(n):
-        square, error_map, valid_mask = squares_outputs[i], error_maps[i], valid_masks[i]
-        if compute_dist_map:
-            distance_map = np.zeros((im_width, im_height))
-        for x in range(im_width):
-            for y in range(im_height):
-                xmin, xmax, ymin, ymax = square
-                # check if point is inside the square
-                left_of_square = x < xmin
-                right_of_square = xmax < x
-                above_square = y < ymin
-                below_square = ymax < y
-                
-                #Compute distance
-                if not (above_square or below_square or left_of_square
-                        or right_of_square):
-                    # inside square
-                    distance = 0.0
-                else:
-                    if above_square and not (left_of_square
-                                             or right_of_square):
-                        distance = ymin - y
-                    elif below_square and not (left_of_square
-                                               or right_of_square):
-                        distance = y - ymax
-                    elif left_of_square and not (above_square or below_square):
-                        distance = xmin - x
-                    elif right_of_square and not (above_square
-                                                  or below_square):
-                        distance = x - xmax
-                    else:
-                        if above_square and left_of_square:
-                            closest_point = (xmin, ymin)
-                        elif above_square and right_of_square:
-                            closest_point = (xmax, ymin)
-                        elif below_square and left_of_square:
-                            closest_point = (xmin, ymax)
-                        elif below_square and right_of_square:
-                            closest_point = (xmax, ymax)
-                        else:
-                            raise Exception("We should never be here")
+@njit(float64(pointT, squareT))
+def point_to_square_distance(point, square):
+    x, y = point
+    xmin, xmax, ymin, ymax = square
+    # check if point is inside the square
+    left_of_square = x < xmin
+    right_of_square = xmax < x
+    above_square = y < ymin
+    below_square = ymax < y
 
-                        x_close, y_close = closest_point
-                        x_dist, y_dist = x - x_close, y - y_close
-                        distance = sqrt(x_dist**2 + y_dist**2)
-                if compute_dist_map:
-                    distance_map[x, y] = distance
-                error = error_map[0, x, y]
-                distances[i, x, y] = distance
-                assert distance >= 0
-                assert errors[i, x, y] == 0
-                errors[i, x, y] = error if valid_mask[0,x,y] else np.nan
-                if np.isnan(errors[i, x, y]):
-                    print("wasnan")
+    if not (above_square or below_square or left_of_square or right_of_square):
+        # inside square
+        distance = 0.0
+    else:
+        if above_square and not (left_of_square or right_of_square):
+            distance = ymin - y
+        elif below_square and not (left_of_square or right_of_square):
+            distance = y - ymax
+        elif left_of_square and not (above_square or below_square):
+            distance = xmin - x
+        elif right_of_square and not (above_square or below_square):
+            distance = x - xmax
+        else:
+            if above_square and left_of_square:
+                closest_point = (xmin, ymin)
+            elif above_square and right_of_square:
+                closest_point = (xmax, ymin)
+            elif below_square and left_of_square:
+                closest_point = (xmin, ymax)
+            elif below_square and right_of_square:
+                closest_point = (xmax, ymax)
+            else:
+                raise Exception("We should never be here")
 
-    return errors.flatten(), distances.flatten()
-    #fig = plt.figure()
-    #cax = plt.imshow(distance_map)
-    #fig.colorbar(cax)
-    #plt.show(
+            x_close, y_close = closest_point
+            x_dist, y_dist = x - x_close, y - y_close
+            distance = sqrt(x_dist**2 + y_dist**2)
+    return distance
+
+
+@njit(float64[:, :](shapeT, squareT), locals={"distance_map": float64[:, :]})
+def compute_distance_map(image_shape, square):
+    distance_map = np.empty(image_shape)
+    w, h = image_shape
+    for x in range(w):
+        for y in range(h):
+            distance_map[x, y] = point_to_square_distance((x, y), square)
+    return distance_map
+
 
 @njit(
-    types.Tuple((float64[:], float64[:], float64[:]))(float64[:], float64[:],
-                                                      float64[:]),
-    locals={"distance_min": float64})
-def error_statistics_at_distance(
-        distances: np.ndarray, errors: np.ndarray, distance_edges: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    types.UniTuple(float64[:], 5)(int64, rangeT, squareT, imagesT, imagesT),
+    locals={
+        "errors_flat": float64[:, :],
+        "distance_map": float64[:]
+    })
+def create_histogram(bins, distance_range, square, predictions, targets):
+    start, end = distance_range
+    width, height = targets.shape[1:]
+    image_shape = (width, height)
+    distance_map = compute_distance_map(image_shape, square).ravel()
+    sort_idxs = np.argsort(distance_map)
+    distance_map = distance_map[sort_idxs]
+    step = (end - start) / bins
+    edges = [start + step * i for i in range(1, bins + 1)]
+    assert edges[-1] == end, "last edge must be ending edge"
+    predictions_flat = np.empty((predictions.shape[0],
+                                 predictions.shape[1] * predictions.shape[2]))
+    targets_flat = np.empty((targets.shape[0],
+                             targets.shape[1] * targets.shape[2]))
+    for i in range(targets.shape[0]):
+        predictions_flat[i, :] = predictions[i, ...].ravel()[sort_idxs]
+        targets_flat[i, :] = targets[i, ...].ravel()[sort_idxs]
 
-    assert len(distances) == len(errors)
-    n_items = len(distances)
-    n_bins = len(distance_edges) - 1
-    distance_min, distance_max = distance_edges[0], distance_edges[-1]
-    sort_idxs = distances.argsort()
-    distances = distances[sort_idxs]
-    errors = errors[sort_idxs]
-    #sorted_distances_errors = sorted(
-    #    zip(distances, errors), key=lambda d_e: d_e[0])
-    j = 0
-    lower_bound = distance_edges[j]
-    upper_bound = distance_edges[j + 1]
-    #errors_in_bin: List[List[float]] = [[0.0]]
-    first_item_idx = 0
-    error_means = np.empty((n_bins, ))
-    error_stds = np.empty((n_bins, ))
-    error_medians = np.empty((n_bins, ))
+    distances = distance_map.ravel()
 
-    while distances[first_item_idx] <= distance_min:
-        first_item_idx += 1
-    #   print("looping first_item_idx =", first_item_idx, "distance_min =",
-    #          distance_min)
+    i = 0
+    # Go to starting index
+    while distances[i] <= start:
+        i += 1
 
-    errors_in_bin_j = np.zeros((n_items, ))
-    n_errors_in_bin_j = 0
-    #raise Exception("asdasd")
-    for i in range(first_item_idx, n_items):
-        distance, error = distances[i], errors[i]
-        assert lower_bound <= distance
-        if distance <= upper_bound:
-            errors_in_bin_j[n_errors_in_bin_j] = error
-            n_errors_in_bin_j += 1
-        else:
-            # is above upper bound
-            errors_in_bin_j_tmp = errors_in_bin_j[:n_errors_in_bin_j]
-            error_means[j] = sqrt((errors_in_bin_j_tmp**2).mean())
-            error_stds[j] = errors_in_bin_j_tmp.std()
-            error_medians[j] = np.median(errors_in_bin_j_tmp)
-            #check if we are at the end
-            if distance_max <= distance:
-                break
-            # else advance to next bin
-            j += 1
-            n_errors_in_bin_j = 0
-            lower_bound = distance_edges[j]
-            upper_bound = distance_edges[j + 1]
+    hist_mae = np.empty(len(edges))
+    hist_rmse = np.empty(len(edges))
+    hist_rel = np.empty(len(edges))
+    hist_delta1 = np.empty(len(edges))
+    for e, edge in enumerate(edges):
+        #1. accumulate indexes for edge
+        first_i = i
+        while i < len(distances) and distances[i] <= edge:
+            i += 1
 
+        assert i != first_i, "must have taken some i"
 
-#    else:
-# if we did reach the end without breaking,
-# we need to fill upp the remaining part of errors_in_bin list
-#while len(errors_in_bin) < n_bins:
-#    errors_in_bin.append(
-#        [np.nan, np.nan])  # two nans supresses warnings in np.nanstd
-    assert len(error_means) == n_bins
-    assert len(error_means) == len(error_stds)
-    return error_means, error_stds, error_medians
+        n_idxs = i - first_i
+        #2. extract values for every error maps
+        edge_predictions = np.empty(predictions_flat.shape[0] * n_idxs)
+        edge_targets = np.empty(targets_flat.shape[0] * n_idxs)
+        for j in range(targets_flat.shape[0]):
+            edge_predictions[j * n_idxs:(
+                j + 1) * n_idxs] = predictions_flat[j, first_i:i]
+            edge_targets[j * n_idxs:(
+                j + 1) * n_idxs] = targets_flat[j, first_i:i]
+
+        #3. compute metrics for bin
+        edge_abs_diff = np.abs(edge_predictions - edge_targets)
+        maxRatio = np.maximum(edge_predictions / edge_targets,
+                              edge_targets / edge_predictions)
+        hist_mae[e] = edge_abs_diff.mean()
+        hist_rel[e] = (edge_abs_diff / edge_targets).mean()
+        hist_rmse[e] = sqrt((edge_abs_diff**2).mean())
+        hist_delta1[e] = (maxRatio < 1.25).astype(float64).mean()
+
+    return np.array(edges), hist_mae, hist_rel, hist_rmse, hist_delta1
 
 
 class Evaluator(object):
-    def __init__(self, output_size):
-        self._errors = []
+    def __init__(self, output_shape, square_width):
+        self._predictions = []
+        self._targets = []
         self._distances = []
-        self.output_size = output_size
+        self.output_shape = output_shape
+        self.square = center_square(output_shape, square_width, square_width)
 
-    def add_results(self, outputs, labels, squares_output):
-        valid_mask = (labels > 0).cpu().numpy().astype(bool)
-        error_maps = torch.abs(outputs.data - labels).cpu().numpy()
-        squares_output = squares_output.cpu().numpy()
+    @property
+    def output_size(self):
+        return np.cumprod(self.output_shape)
 
-        errors, distances = compute_errors_and_distances(
-            error_maps, valid_mask, squares_output)
-        print("errors.shape =",errors.shape)
-        print("error_maps.shape =",error_maps.shape)
-        self._errors.append(errors)
-        self._distances.append(distances)
+    def add_results(self, outputs, labels):
+        valid_mask = labels > 0
+        outputs[~valid_mask] = np.nan
+        labels[~valid_mask] = np.nan
+        self._predictions.append(outputs.squeeze().cpu().data.numpy())
+        self._targets.append(labels.squeeze().cpu().data.numpy())
 
     def draw_plots(self):
-        distances = np.array(self._distances).flatten()
-        errors = np.array(self._errors).flatten()
-        plot_labels = ["mean", "meadian"]
-        print("errors rmse =",sqrt(np.mean(errors ** 2)))
+        #Interleave sorted error arrays to create one long sorted error array
+
+        edges, hist_mae, hist_rel, hist_rmse, hist_delta1 = create_histogram(
+            50, (0., 100.), self.square,
+            np.asarray(self._predictions), np.asarray(self._targets))
+
         with plt.xkcd():
-            h, xedges, yedges, ax = plt.hist2d(
-                distances,
-                errors,
-                bins=50,
-                range=[[1, max(self.output_size) / 2], [0, 1]],
-                normed=True)
-            error_means, error_stds, error_median = error_statistics_at_distance(
-                distances, errors, xedges)
-            plt.plot(xedges[1:], error_means)
-            plt.plot(xedges[1:], error_median)
-            plot_labels = ["mean", "meadian"]
+            plt.figure()
+            plt.plot(edges, hist_mae)
+            plt.plot(edges,hist_rel)
+            plt.plot(edges,hist_rmse)
+            plt.plot(edges,hist_delta1)
+            plot_labels = ["mae (m)", "rel", "rmse", "delta1"]
+            plt.xlabel("distance (px)")
+            plt.ylabel("error")
             plt.legend(plot_labels)
 
     def plot(self):
@@ -191,150 +172,3 @@ class Evaluator(object):
     def save_plot(self, path):
         self.draw_plots()
         plt.savefig(path)
-
-
-def main(args) -> None:
-    model = RGBDRGB()
-    model.make_4_ch()
-    checkpoint = load_checkpoint(args.checkpoint)
-    square_provider_str = checkpoint["square_provider"]
-    square_provider = square_providers_by_name[square_provider_str]
-    model.load_state_dict(checkpoint["state_dict"])
-    model = model.cuda(device=args.device)
-    dataset = SUNRGBD(args.data_path, square_provider=square_provider)
-    data_loader = DataLoader(dataset, batch_size=args.batch_size)
-    model.eval()
-
-    def set_device(obj):
-        return obj.cpu() if args.device is None else obj.cuda(
-            device=args.device)
-
-    losses_l1 = torch.zeros(len(data_loader))
-    losses_l2 = torch.zeros(len(data_loader))
-
-    im_width, im_height = dataset.output_size
-    distances = [0.0]
-    errors = [0.0]
-    l1lossfn = L1Loss()
-    l2lossfn = MSELoss()
-    for epoch, mini_batch, features, labels, squares_input, squares_output in epochs_iteratior(
-            data_loader, args.device, 1):
-        outputs = model(features)
-        l1_loss = l1lossfn(outputs, labels).cpu()
-        l2_loss = l2lossfn(outputs, labels).cpu()
-        print(l1_loss)
-        losses_l1[mini_batch] = l1_loss.data[0]
-        losses_l2[mini_batch] = l2_loss.data[0]
-
-        error_maps = torch.abs(outputs - labels).data.cpu().numpy()
-        squares_output = squares_output.cpu().numpy()
-        compute_errors_and_distances(error_maps, squares_output, distances,
-                                     errors)
-        stdout.write(f"\repoch: {epoch} batch: {mini_batch}")
-    distances.pop(0)
-    errors.pop(0)
-    print()
-    print("l1 loss =", losses_l1.mean())
-    print("l2 loss =", losses_l2.mean())
-
-    with plt.xkcd():
-        h, xedges, yedges, ax = plt.hist2d(
-            distances,
-            errors,
-            bins=50,
-            range=[[1, max(dataset.output_size) / 2], [0, 1]],
-            normed=True)
-        error_means, error_stds, error_median = error_statistics_at_distance(
-            distances, errors, xedges)
-        plt.plot(xedges[1:], error_means)
-        plt.plot(xedges[1:], error_median)
-        plot_labels = ["mean", "meadian"]
-        if args.no_depth_cp is not None:
-            model.cpu()
-            plot_labels.append("no depth")
-            no_depth_checkpoint = load_checkpoint(args.no_depth_cp)
-            no_depth_model = RGBDRGB()
-            no_depth_model.make_4_ch()
-            no_depth_model.load_state_dict(no_depth_checkpoint["state_dict"])
-            no_depth_model = set_device(no_depth_model)
-            no_depth_model.eval()
-            errors = []
-            dataset.square_provider = no_square
-            for epoch in range(args.epochs):
-                for i, mini_batch in enumerate(data_loader):
-                    features, labels, squares_input, squares_output = mini_batch
-                    n = features.shape[0]
-                    if n != args.batch_size:
-                        continue
-                    features, labels = Variable(
-                        set_device(features), volatile=True), Variable(
-                            set_device(labels), volatile=True)
-                    outputs = no_depth_model(features)
-                    loss = loss_fn(outputs, labels).cpu()
-                    errors.append(loss.mean().data.numpy()[0])
-            mean_error = np.mean(errors)
-            print("no depth mean_l1_error =", mean_error)
-            print("no depth mean_l2_error =", mean_error)
-
-            plt.plot([0, max(dataset.output_size) / 2], [mean_error] * 2)
-        plt.legend(plot_labels)
-        # error_stds_scaled = error_stds / 10
-        # plt.plot(xedges[1:], error_means + error_stds_scaled)
-        # plt.plot(xedges[1:], error_means - error_stds_scaled)
-
-        plt.colorbar(ax)
-        plt.title("pixelwise error and distance to measured depth density")
-        plt.xlabel("distance (pixels)")
-        plt.ylabel("error (absolute)")
-        plt.show()
-
-
-if __name__ == "__main__":
-    from argparse import ArgumentParser
-    parser = ArgumentParser(
-        description=
-        "evaluates the given model on a test set using various metrics")
-    parser.add_argument(
-        "--data-path",
-        "-dp",
-        help="path to the SUNRGBD dataset to test with",
-        type=str)
-    parser.add_argument(
-        "--checkpoint",
-        "-cp",
-        help="directory to the model checkpoint to evaluate",
-        type=str)
-    parser.add_argument(
-        "--no-depth-cp",
-        help="path to checkpoint of a chackpoint trained with no depth",
-        type=str,
-        default=None)
-    parser.add_argument(
-        "--batch-size",
-        "-bs",
-        help="batch size to use during evaluation",
-        default=16,
-        type=int)
-    parser.add_argument(
-        "--device",
-        "-dev",
-        help=
-        "if specified the gpu device to use for evaluation. cpu if not specified",
-        default=None,
-        type=int)
-    parser.add_argument(
-        "--epochs",
-        "-ep",
-        help="number of full passes through the dataset.",
-        default=1,
-        type=int)
-    args = parser.parse_args()
-    from model import RGBDRGB
-    from SUNRGBD import SUNRGBD
-    import torch
-    from torch.utils.data import DataLoader
-    from torch.autograd import Variable
-    from train import loss_fn
-    from torch.nn import L1Loss, MSELoss
-
-    main(args)
