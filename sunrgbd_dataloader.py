@@ -31,7 +31,7 @@ rgb_normalize = trans.Normalize(
     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
 SquareShape = Tuple[int, int, int, int]
-ImageShape = Tuple[int, int, int]
+ImageShape = Tuple[int, int]
 
 
 def no_square(image_shape: ImageShape) -> SquareShape:
@@ -40,7 +40,7 @@ def no_square(image_shape: ImageShape) -> SquareShape:
 
 def center_square(image_shape: ImageShape, center_width_px: int,
                   center_height_px: int) -> SquareShape:
-    width, height = image_shape[:2]
+    width, height = image_shape
     assert center_width_px <= width
     assert center_height_px <= height
     center_x, center_y = width // 2, height // 2
@@ -111,14 +111,13 @@ def apply_square(square: SquareShape,
 def inverse_apply_uniform_square_batch(square : torch.Tensor,batch : Union[torch.Tensor,torch.autograd.Variable]):
     x_min, x_max, y_min, y_max = square[0,:]
     batch[...,x_min:x_max,y_min:y_max] = 0
-    
+
 class SUNRGBDDataset(Dataset):
 
     modality_names = ['rgbd']  # , 'g', 'gd'
 
     def __init__(self,
                  base_path: str,
-                 type: str,
                  modality: str,
                  network_input_size: Tuple[int, int] = (192, 256),
                  network_output_size: Tuple[int, int] = (94, 126),
@@ -134,8 +133,6 @@ class SUNRGBDDataset(Dataset):
         self.update()
         self.x_scale_factor = network_output_size[0] / network_input_size[0]
         self.y_scale_factor = network_output_size[1] / network_input_size[1]
-        print("self.x_scale_factor =", self.x_scale_factor)
-        print("self.y_scale_factor =", self.y_scale_factor)
 
     def update(self):
         self.data_paths = []
@@ -250,49 +247,49 @@ def scale_depth_image(image: np.ndarray) -> np.ndarray:
 
 def plot(feature=None, target=None, prediction=None):
     from matplotlib import pyplot as plt
-    with plt.xkcd():
-        fig, [[ax1, ax2], [ax3, ax4]] = plt.subplots(2, 2)
+    fig, [[ax1, ax2], [ax3, ax4]] = plt.subplots(2, 2)
+    if feature is not None:
+        feature = np.asarray(feature)
+        image = feature[:, :, :3]
+        image = image - image.min()
+        image = image / image.max()
+        depth_in = feature[:, :, -1]
+        ax1.imshow(image)
+        ax2.imshow(depth_in.squeeze(), cmap="gray")
+    ax1.set_title("in image")
+    ax2.set_title("in depth")
 
-        if feature is not None:
-            feature = np.asarray(feature)
-            image = feature[:, :, :3]
-            image = image - image.min()
-            image = image / image.max()
-            depth_in = feature[:, :, -1]
-            ax1.imshow(image)
-            ax2.imshow(depth_in.squeeze(), cmap="gray")
-        ax1.set_title("in image")
-        ax2.set_title("in depth")
+    if target is not None:
+        depth_target = np.asarray(target)
+        ax3.imshow(depth_target.squeeze(), cmap="gray")
+    ax3.set_title("depth target")
 
-        if target is not None:
-            depth_target = np.asarray(target)
-            ax3.imshow(depth_target.squeeze(), cmap="gray")
-        ax3.set_title("depth target")
+    if prediction is not None:
+        depth_prediction = np.asarray(prediction)
+        ax4.imshow(depth_prediction.squeeze(), cmap="gray")
+    ax4.set_title("predicted depth")
+    return fig
 
-        if prediction is not None:
-            depth_prediction = np.asarray(prediction)
-            ax4.imshow(depth_prediction.squeeze(), cmap="gray")
-        ax4.set_title("predicted depth")
-        return fig
+def compute_sunrgbd__metrics(dataset):
+    from matplotlib import pyplot as plt
+
+    for i in range(len(dataset)):
+        dataset[i]
 
 
 def main():
-    dataset = SUNRGBD(sys.argv[1], square_provider=center_square_50)
+    dataset = SUNRGBDDataset(sys.argv[1], square_provider=center_square_50,modality="rgbd")
 
     from matplotlib import pyplot as plt
     i = 0
-    while True:
+    # while True:
 
-        f, t, sqi, sqo = dataset[i]
-        i += 1
-        fig = plot(
-            feature=f.numpy().transpose(1, 2, 0),
-            target=t.numpy().transpose(1, 2, 0))
-        plt.show(fig)
-    #Since all images have close to a 4:3 apsect ratio, i hope that it will be fine to resize them all to that ratio,
-    #Given that random stretching and so on will be applied to the images, this shouldn't matter
-    #I use the same resolution as in demon
-
+    f, t, sqi, sqo = dataset[i]
+    i += 1
+    fig = plot(
+        feature=f.numpy().transpose(1, 2, 0),
+        target=t.numpy().transpose(1, 2, 0))
+    plt.show(fig)
 
 if __name__ == "__main__":
     main()

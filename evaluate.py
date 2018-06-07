@@ -1,10 +1,7 @@
 from math import sqrt
-import matplotlib
-matplotlib.use("agg")
-from matplotlib import pyplot as plt
 import numpy as np
 from numba import njit, float64, types, int64, float32
-from sunrgbd_dataloader import center_square
+from dataloaders import center_square
 
 pointT = types.UniTuple(float64, 2)
 rangeT = types.UniTuple(float64, 2)
@@ -142,6 +139,8 @@ class Evaluator(object):
 
     def add_results(self, outputs, labels):
         valid_mask = labels > 0
+        outputs = outputs.clone()
+        labels = labels.clone()
         outputs[~valid_mask] = np.nan
         labels[~valid_mask] = np.nan
         self._predictions.append(outputs.squeeze().cpu().data.numpy())
@@ -151,24 +150,34 @@ class Evaluator(object):
         #Interleave sorted error arrays to create one long sorted error array
 
         edges, hist_mae, hist_rel, hist_rmse, hist_delta1 = create_histogram(
-            50, (0., 100.), self.square,
-            np.asarray(self._predictions), np.asarray(self._targets))
-
-        with plt.xkcd():
-            plt.figure()
-            plt.plot(edges, hist_mae)
-            plt.plot(edges,hist_rel)
-            plt.plot(edges,hist_rmse)
-            plt.plot(edges,hist_delta1)
-            plot_labels = ["mae (m)", "rel", "rmse", "delta1"]
-            plt.xlabel("distance (px)")
-            plt.ylabel("error")
-            plt.legend(plot_labels)
+            50, (0., 100.), self.square, np.asarray(self._predictions),
+            np.asarray(self._targets))
+        import matplotlib
+        if matplotlib.get_backend() != "agg":
+            matplotlib.use("agg")
+        from matplotlib import pyplot as plt
+        plt.figure()
+        plt.plot(edges, hist_mae)
+        plt.plot(edges, hist_rel)
+        plt.plot(edges, hist_rmse)
+        plt.plot(edges, hist_delta1)
+        plot_labels = ["mae (m)", "rel", "rmse", "delta1"]
+        plt.xlabel("distance (px)")
+        plt.ylabel("error")
+        plt.legend(plot_labels)
 
     def plot(self):
+        import matplotlib
+        if matplotlib.get_backend() != "agg":
+            matplotlib.use("agg")
+        from matplotlib import pyplot as plt
         self.draw_plots()
         plt.show()
 
     def save_plot(self, path):
         self.draw_plots()
+        import matplotlib
+        if matplotlib.get_backend() != "agg":
+            matplotlib.use("agg")
+        from matplotlib import pyplot as plt
         plt.savefig(path)

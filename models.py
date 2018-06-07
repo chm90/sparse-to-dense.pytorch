@@ -1,4 +1,3 @@
-import os
 import torch
 from torch import cat
 import torch.nn as nn
@@ -234,12 +233,14 @@ class ResNet(nn.Module):
     def __init__(self,
                  layers,
                  decoder,
-                 in_channels=3,
-                 out_channels=1,
-                 pretrained=True,
+                 in_channels :int=3,
+                 out_channels :int=1,
+                 pretrained:bool=True,
                  image_shape=(oheight, owidth),
-                 skip_type="sum"):
+                 skip_type:str="sum",
+                 square_width=50) -> None:
         self.image_shape = image_shape
+        self.square_width = square_width
         if layers not in [18, 34, 50, 101, 152]:
             raise RuntimeError(
                 'Only 18, 34, 50, 101, and 152 layer model are defined for ResNet. Got {}'.
@@ -293,12 +294,16 @@ class ResNet(nn.Module):
             stride=1,
             padding=1,
             bias=False)
-        self.bilinear = nn.Upsample(size=image_shape, mode='bilinear')
+        self.bilinear = nn.Upsample(size=image_shape, mode='bilinear',align_corners=True)
         # weight init
         self.conv2.apply(weights_init)
         self.bn2.apply(weights_init)
         self.decoder.apply(weights_init)
         self.conv3.apply(weights_init)
+
+    @property
+    def in_channels(self):
+        return self.conv1.weight.shape[1]
 
     def forward(self, x):
         # resnet
@@ -324,7 +329,6 @@ class ResNet(nn.Module):
         # print("conv2 output shape =", x.shape)
 
         x = self.bn2(x)
-
         # decoder
         x = self.decoder(x,x2=x3,x3=x2,x4=x1)
         # print("decoder output shape =", x.shape)

@@ -1,35 +1,34 @@
 import argparse
+import csv
 import os
 import shutil
-import time
 import sys
-import csv
+import time
 from sys import stdout
+from typing import List, Tuple
+
+import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.parallel
 import torch.backends.cudnn as cudnn
+import torch.nn.parallel
 import torch.optim
 import torch.utils.data
-import evaluate
-from nyu_dataloader import NYUDataset
-from sunrgbd_dataloader import SUNRGBDDataset, inverse_apply_uniform_square_batch
-from models import Decoder, ResNet, SKIP_TYPES
-from metrics import AverageMeter, Result
-import criteria
-import utils
-from my_model import RGBDRGB
-from typing import Tuple, List
 from matplotlib import pyplot as plt
-import numpy as np
+
+import typing
+import criteria
+import evaluate
+import utils
+from dataloaders import RGBDDataset, choose_dataset_type
+from metrics import AverageMeter, Result, MaskedResult
+from models import SKIP_TYPES, Decoder, ResNet
 
 ResultListT = List[Tuple[Result, Result, Result]]
-
+modality_names = RGBDDataset.modality_names
 model_names = ['resnet18', 'resnet50', 'my_resnet18']
 loss_names = ['l1', 'l2']
 data_names = ['nyudepthv2', "SUNRGBD"]
 decoder_names = Decoder.names
-modality_names = NYUDataset.modality_names
 depth_sampling_types = ["sparse", "square"]
 optimizers = ["sgd", "adam"]
 cudnn.benchmark = True
@@ -108,9 +107,9 @@ parser.add_argument(
 parser.add_argument(
     '-b',
     '--batch-size',
-    default=8,
+    default=16,
     type=int,
-    help='mini-batch size (default: 8)')
+    help='mini-batch size (default: 16)')
 parser.add_argument(
     '--lr',
     '--learning-rate',
@@ -181,7 +180,7 @@ parser.add_argument(
     "--adjust-lr-ep",
     help=
     "number of epochs with non decreasing validation loss before adjusting learning rate",
-    default=5,
+    default=3,
     type=int)
 parser.add_argument(
     "--min-adjust-lr-ep",
@@ -193,18 +192,29 @@ parser.add_argument(
     type=int,
     default=50,
     help="width of square in the middle (default 50)")
+parser.add_argument(
+    "--transfer-from",
+    help="model checkpoint to do transfer learning from",
+    type=str)
+parser.add_argument(
+    "--train-top-only",
+    action="store_true",
+    default=False,
+    help=
+    "if set, train only the top two layers. Only applies if aditionaly using --transfer-from"
+)
 
 fieldnames = [
     'mse', 'rmse', 'rmse inside', 'rmse outside', 'absrel', 'absrel inside',
-    'absrel outside', 'lg10', 'mae', 'mae inside', 'mae outside',
-    'delta1', "delta1 inside", 'delta1 outside', 'delta2', 'delta3',
-    'data_time', 'gpu_time'
+    'absrel outside', 'lg10', 'mae', 'mae inside', 'mae outside', 'delta1',
+    "delta1 inside", 'delta1 outside', 'delta2', 'delta3', 'data_time',
+    'gpu_time'
 ]
 best_result = Result()
 best_result.set_to_worst()
 
 
-def main():
+def main() -> int:
     global args, best_result, output_directory, train_csv, test_csv
     args = parser.parse_args()
     dataset = args.data
@@ -214,18 +224,22 @@ def main():
     image_shape = (192, 256)  # if "my" in args.arch else (228, 304)
 
     # create results folder, if not already exists
-    output_directory = os.path.join(
-        args.output_dir,
-        f'{args.data}.modality={args.modality}.arch={args.arch}'
-        f'.skip={args.skip_type}.decoder={args.decoder}'
-        f'.criterion={args.criterion}.lr={args.lr}.bs={args.batch_size}'
-        f'.opt={args.optimizer}')
+    if args.transfer_from:
+        output_directory = f"{args.transfer_from}_transfer"
+    else:
+        output_directory = os.path.join(
+            args.output_dir,
+            f'{args.data}.modality={args.modality}.arch={args.arch}'
+            f'.skip={args.skip_type}.decoder={args.decoder}'
+            f'.criterion={args.criterion}.lr={args.lr}.bs={args.batch_size}'
+            f'.opt={args.optimizer}')
     args.data = os.path.join(os.environ["DATASET_DIR"], args.data)
     print("output directory :", output_directory)
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
     elif not args.evaluate:
         raise Exception("output directory allready exists")
+
     train_csv = os.path.join(output_directory, 'train.csv')
     test_csv = os.path.join(output_directory, 'test.csv')
     best_txt = os.path.join(output_directory, 'best.txt')
@@ -239,23 +253,16 @@ def main():
     # Data loading code
     print("=> creating data loaders ...")
     traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
-
-    if dataset == "SUNRGBD":
-        # only squares implemented currently
-        train_dataset = SUNRGBDDataset(
-            traindir,
-            type="train",
-            modality=args.modality,
-            output_shape=image_shape)
-    else:
-        train_dataset = NYUDataset(
-            traindir,
-            type='train',
-            modality=args.modality,
-            num_samples=args.num_samples,
-            square_width=args.square_width,
-            output_shape=image_shape)
+    valdir = traindir if dataset == "SUNRGBD" else os.path.join(
+        args.data, 'val')
+    DatasetType = choose_dataset_type(dataset)
+    train_dataset = DatasetType(
+        traindir,
+        phase='train',
+        modality=args.modality,
+        num_samples=args.num_samples,
+        square_width=args.square_width,
+        output_shape=image_shape)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -264,19 +271,16 @@ def main():
         num_workers=args.workers,
         pin_memory=True,
         sampler=None)
-    print("len(train_dataset) =", len(train_dataset))
-    if dataset == "SUNRGBD":
-        # set batch size to be 1 for validation
-        val_dataset = SUNRGBDDataset(
-            valdir, type="val", modality=args.modality)
-    else:
-        val_dataset = NYUDataset(
-            valdir,
-            type='val',
-            modality=args.modality,
-            num_samples=args.num_samples,
-            square_width=args.square_width,
-            output_shape=image_shape)
+
+    print("=> training examples:", len(train_dataset))
+
+    val_dataset = DatasetType(
+        valdir,
+        phase='val',
+        modality=args.modality,
+        num_samples=args.num_samples,
+        square_width=args.square_width,
+        output_shape=image_shape)
 
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
@@ -284,6 +288,8 @@ def main():
         shuffle=False,
         num_workers=args.workers,
         pin_memory=True)
+
+    print("=> validation examples:", len(val_dataset))
 
     print("=> data loaders created.")
 
@@ -301,8 +307,39 @@ def main():
                 checkpoint['epoch']))
         else:
             print("=> no best model found at '{}'".format(best_model_filename))
-        validate(val_loader, model, checkpoint['epoch'], write_to_file=False)
-        return
+        avg_result, avg_result_inside, avg_result_outside, _, results, evaluator = validate(
+            val_loader, model, checkpoint['epoch'], write_to_file=False)
+        write_results(best_txt, avg_result, avg_result_inside,
+                      avg_result_outside, checkpoint['epoch'])
+        for loss_name, losses in [
+            ("rmses", (res.result.rmse for res in results)),
+            ("delta1s", (res.result.delta1 for res in results)),
+            ("delta2s", (res.result.delta2 for res in results)),
+            ("delta3s", (res.result.delta3 for res in results)),
+            ("maes", (res.result.mae for res in results)),
+            ("absrels", (res.result.absrel for res in results)),
+            ("rmses_inside", (res.result_inside.rmse for res in results)),
+            ("delta1s_inside", (res.result_inside.delta1 for res in results)),
+            ("delta2s_inside", (res.result_inside.delta2 for res in results)),
+            ("delta3s_inside", (res.result_inside.delta3 for res in results)),
+            ("maes_inside", (res.result_inside.mae for res in results)),
+            ("absrels_inside", (res.result_inside.absrel for res in results)),
+            ("rmses_outside", (res.result_outside.rmse for res in results)),
+            ("delta1s_outside", (res.result_outside.delta1 for res in results)),
+            ("delta2s_outside", (res.result_outside.delta2 for res in results)),
+            ("delta3s_outside", (res.result_outside.delta3 for res in results)),
+            ("maes_outside", (res.result_outside.mae for res in results)),
+            ("absrels_outside", (res.result_outside.absrel for res in results)),
+        ]:
+            with open(
+                    os.path.join(output_directory,
+                                 f"validation_{loss_name}.csv"),
+                    "w") as csv_file:
+                wr = csv.writer(csv_file, quoting=csv.QUOTE_ALL)
+                wr.writerow(losses)
+
+        evaluator.save_plot(os.path.join(output_directory, "best.png"))
+        return 0
 
     # optionally resume from a checkpoint
     elif args.resume:
@@ -317,56 +354,60 @@ def main():
                 checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
-            return
-
+            return 1
     # create new model
     else:
-        # define model
-        print("=> creating Model ({}-{}) ...".format(args.arch, args.decoder))
-        in_channels = len(args.modality)
-        if args.arch == 'resnet50':
+        if args.transfer_from:
+            if os.path.isfile(args.transfer_from):
+                print(f"=> loading checkpoint '{args.transfer_from}'")
+                checkpoint = torch.load(args.transfer_from)
+                args.start_epoch = 0
+                model = checkpoint['model']
+                print("=> loaded checkpoint")
+                train_params = list(model.conv3.parameters()) + list(
+                    model.decoder.layer4.parameters()
+                ) if args.train_top_only else model.parameters()
+            else:
+                print(f"=> no checkpoint found at '{args.transfer_from}'")
+                return 1
+        else:
+            # define model
+            print("=> creating Model ({}-{}) ...".format(
+                args.arch, args.decoder))
+            in_channels = len(args.modality)
+            if args.arch == 'resnet50':
+                n_layers = 50
+            elif args.arch == 'resnet18':
+                n_layers = 18
             model = ResNet(
-                layers=50,
+                layers=n_layers,
                 decoder=args.decoder,
                 in_channels=in_channels,
                 out_channels=out_channels,
                 pretrained=args.pretrained,
                 image_shape=image_shape,
                 skip_type=args.skip_type)
-        elif args.arch == 'resnet18':
-            model = ResNet(
-                layers=18,
-                decoder=args.decoder,
-                in_channels=in_channels,
-                out_channels=out_channels,
-                pretrained=args.pretrained,
-                image_shape=image_shape,
-                skip_type=args.skip_type)
-        elif args.arch == 'my_resnet18':
-            model = RGBDRGB(image_shape, batch_size=args.batch_size)
-            assert args.modality == "rgbd"
-            assert args.skip_connection, "RGBDRGB only supports using skipp connections"
-
-        print("=> model created.")
+            print("=> model created.")
+            train_params = model.parameters()
 
         adjusting_learning_rate = False
         if args.optimizer == "sgd":
             optimizer = torch.optim.SGD(
-                model.parameters(),
+                train_params,
                 args.lr,
                 momentum=args.momentum,
                 weight_decay=args.weight_decay)
             adjusting_learning_rate = True
         elif args.optimizer == "adam":
             optimizer = torch.optim.Adam(
-                model.parameters(), weight_decay=args.weight_decay)
+                train_params, weight_decay=args.weight_decay)
         else:
             raise Exception("We should never be here")
 
         if adjusting_learning_rate:
             print("=> Learning rate adjustment enabled.")
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, patience=4, cooldown=2, verbose=True)
+                optimizer, patience=args.adjust_lr_ep, verbose=True)
         # create new csv files with only header
         with open(train_csv, 'w') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -389,21 +430,16 @@ def main():
             train_loader, model, criterion, optimizer, epoch)
         train_results.append((res_train, res_train_inside, res_train_outside))
         # evaluate on validation set
-        res_val, res_val_inside, res_val_outside, img_merge = validate(
-            val_loader, model, epoch)
+        res_val, res_val_inside, res_val_outside, img_merge, _, _ = validate(
+            val_loader, model, epoch, True)
         val_results.append((res_val, res_val_inside, res_val_outside))
         # remember best rmse and save checkpoint
         is_best = res_val.rmse < best_result.rmse
         if is_best:
             epochs_since_best = 0
             best_result = res_val
-            with open(best_txt, 'w') as txtfile:
-                txtfile.write(
-                    "epoch={}\nmse={:.3f}\nrmse={:.3f}\nrmse_inside={:.3f}\nrmse_outside={:.3f}\nabsrel={:.3f}\nlg10={:.3f}\nmae={:.3f}\ndelta1={:.3f}\nt_gpu={:.4f}\n".
-                    format(epoch, res_val.mse, res_val.rmse,
-                           res_val_inside.rmse, res_val_outside.rmse,
-                           res_val.absrel, res_val.lg10, res_val.mae,
-                           res_val.delta1, res_val.gpu_time))
+            write_results(best_txt, res_val, res_val_inside, res_val_outside,
+                          epoch)
             if img_merge is not None:
                 img_filename = output_directory + '/comparison_best.png'
                 utils.save_image(img_merge, img_filename)
@@ -424,6 +460,19 @@ def main():
             print("early stopping")
         if adjusting_learning_rate:
             scheduler.step(res_val.rmse)
+    return 0
+
+
+def write_results(txt: str, res: Result, res_inside: Result,
+                  res_outside: Result, epoch: int):
+    res.name = "result"
+    res_inside.name = "result inside"
+    res_outside.name = "result outside"
+    with open(txt, 'w') as txtfile:
+        txtfile.write(str(res) + "\n")
+        txtfile.write(str(res_inside) + "\n")
+        txtfile.write(str(res_outside) + "\n")
+        txtfile.write(f"epoch: {epoch}")
 
 
 def train(train_loader, model, criterion, optimizer,
@@ -436,8 +485,7 @@ def train(train_loader, model, criterion, optimizer,
     model.train()
 
     end = time.time()
-    for i, (input, target, input_square,
-            output_square) in enumerate(train_loader):
+    for i, (input, target) in enumerate(train_loader):
         input, target = input.cuda(), target.cuda()
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
@@ -456,27 +504,15 @@ def train(train_loader, model, criterion, optimizer,
         gpu_time = time.time() - end
 
         # measure accuracy and record loss
-        result = Result()
         output1 = torch.index_select(depth_pred.data, 1,
                                      torch.cuda.LongTensor([0]))
         #assume all squares are of same size
-        x_min, x_max, y_min, y_max = output_square[0]
-        mask_inside = (slice(None), slice(None), slice(x_min, x_max),
-                       slice(y_min, y_max))
-        mask_outside = torch.ones_like(output1).byte()
-        try:
-            mask_outside[mask_inside] = 0  #False
-        except RuntimeError:
-            pass
-        result_inside = Result(mask=mask_inside)
-        result_outside = Result(mask=mask_outside)
+        result = MaskedResult(train_loader.dataset.mask_inside_square)
         result.evaluate(output1, target)
-        result_inside.evaluate(output1, target)
-        result_outside.evaluate(output1, target)
-        average_meter.update(result, gpu_time, data_time, input.size(0))
-        inside_average_meter.update(result_inside, gpu_time, data_time,
+        average_meter.update(result.result, gpu_time, data_time, input.size(0))
+        inside_average_meter.update(result.result_inside, gpu_time, data_time,
                                     input.size(0))
-        outside_average_meter.update(result_outside, gpu_time, data_time,
+        outside_average_meter.update(result.result_outside, gpu_time, data_time,
                                      input.size(0))
         end = time.time()
 
@@ -496,11 +532,11 @@ def train(train_loader, model, criterion, optimizer,
                     f'Lg10={result.lg10:.3f}({average.lg10:.3f}) \n'
                     '\n')
 
-            print_result(result, "result", average_meter)
-            print_result(result_inside, "result_inside", inside_average_meter)
-            print_result(result_outside, "result_outside",
+            print_result(result.result, "result", average_meter)
+            print_result(result.result_inside, "result_inside", inside_average_meter)
+            print_result(result.result_outside, "result_outside",
                          outside_average_meter)
-            break
+        break
     avg = average_meter.average()
     avg_inside = inside_average_meter.average()
     avg_outside = outside_average_meter.average()
@@ -529,7 +565,12 @@ def train(train_loader, model, criterion, optimizer,
     return avg, avg_inside, avg_outside
 
 
-def validate(val_loader, model, epoch, write_to_file=True):
+def validate(val_loader,
+             model: torch.nn.Module,
+             epoch: int,
+             write_to_file: bool = True
+             ) -> typing.Tuple[Result, Result, Result, np.array, typing.List[
+                 MaskedResult], evaluate.Evaluator]:
     average_meter = AverageMeter()
     inside_average_meter = AverageMeter()
     outside_average_meter = AverageMeter()
@@ -539,8 +580,8 @@ def validate(val_loader, model, epoch, write_to_file=True):
     evaluator = evaluate.Evaluator(val_loader.dataset.output_shape,
                                    args.square_width)
     end = time.time()
-    for i, (input, target, square_input,
-            square_output) in enumerate(val_loader):
+    results = []
+    for i, (input, target) in enumerate(val_loader):
         input, target = input.cuda(), target.cuda()
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
@@ -553,28 +594,17 @@ def validate(val_loader, model, epoch, write_to_file=True):
         torch.cuda.synchronize()
         gpu_time = time.time() - end
         # measure accuracy and record loss
-        result = Result()
         output1 = torch.index_select(depth_pred.data, 1,
                                      torch.cuda.LongTensor([0]))
         evaluator.add_results(output1, target)
         #assume all squares are of same size
-        x_min, x_max, y_min, y_max = square_output[0]
-        mask_inside = (slice(None), slice(None), slice(x_min, x_max),
-                       slice(y_min, y_max))
-        mask_outside = torch.ones_like(output1).byte()
-        try:
-            mask_outside[mask_inside] = 0  #False
-        except RuntimeError:
-            pass
-        result_inside = Result(mask=mask_inside)
-        result_outside = Result(mask=mask_outside)
+        result = MaskedResult(val_loader.dataset.mask_inside_square)
         result.evaluate(output1, target)
-        result_inside.evaluate(output1, target)
-        result_outside.evaluate(output1, target)
-        average_meter.update(result, gpu_time, data_time, input.size(0))
-        inside_average_meter.update(result_inside, gpu_time, data_time,
+        results.append(result)
+        average_meter.update(result.result, gpu_time, data_time, input.size(0))
+        inside_average_meter.update(result.result_inside, gpu_time, data_time,
                                     input.size(0))
-        outside_average_meter.update(result_outside, gpu_time, data_time,
+        outside_average_meter.update(result.result_outside, gpu_time, data_time,
                                      input.size(0))
         end = time.time()
         # save 8 images for visualization
@@ -594,8 +624,7 @@ def validate(val_loader, model, epoch, write_to_file=True):
         average = average_meter.average()
         if (i + 1) % args.print_freq == 0:
             #print('=> output: {}'.format(output_directory))
-            def print_result(result, result_name, averege_meter):
-                average = averege_meter.average()
+            def print_result(result, result_name):
                 stdout.write(
                     f'Validation Epoch: {epoch} [{i + 1}/{len(val_loader)}]\t'
                     f"{result_name}: "
@@ -607,25 +636,18 @@ def validate(val_loader, model, epoch, write_to_file=True):
                     #f'REL={result.absrel:.3f}({average.absrel:.3f}) '
                     #f'Lg10={result.lg10:.3f}({average.lg10:.3f}) \n'
                     '\n')
-
-            print_result(result, "result", average_meter)
-            print_result(result_inside, "result_inside", inside_average_meter)
-            print_result(result_outside, "result_outside",
-                         outside_average_meter)
+            print_result(result.result,"result")
 
     avg = average_meter.average()
     avg_inside = inside_average_meter.average()
     avg_outside = outside_average_meter.average()
+    avg.name = "average"
+    avg_inside.name = "average inside"
+    avg_outside.name = "average outside"
+
     gpu_time = average.gpu_time
-    print(f'\n*\n'
-          f'RMSE={avg.rmse:.3f}\n'
-          f'RMSE_INSIDE={avg_inside.rmse:.3f}\n'
-          f'RMSE_OUTSIDE={avg_outside.rmse:.3f}\n'
-          f'MAE={avg.mae:.3f}\n'
-          f'Delta1={avg.delta1:.3f}\n'
-          f'REL={avg.absrel:.3f}\n'
-          f'Lg10={avg.lg10:.3f}\n'
-          f't_GPU={gpu_time:.3f}\n')
+    print(
+        f'\n*\n' + str(avg) + "\n" + str(avg_inside) + "\n" + str(avg_outside))
 
     if write_to_file:
         with open(test_csv, 'a') as csvfile:
@@ -650,12 +672,10 @@ def validate(val_loader, model, epoch, write_to_file=True):
                 'gpu_time': avg.gpu_time,
                 'data_time': avg.data_time
             })
-        evaluator.save_plot(
-            os.path.join(output_directory, f"evaluation_epoch{epoch}.png"))
-    else:
-        evaluator.save_plot("evaluation.png")
-        print("saved plot to evaluation")
-    return avg, avg_inside, avg_outside, img_merge
+    evaluator.save_plot(
+        os.path.join(output_directory, f"evaluation_epoch{epoch}.png"))
+
+    return avg, avg_inside, avg_outside, img_merge, results, evaluator
 
 
 def save_checkpoint(state, is_best, epoch):
@@ -672,47 +692,23 @@ def save_checkpoint(state, is_best, epoch):
             os.remove(prev_checkpoint_filename)
 
 
-# class LearningRateAdjuster(object):
-#
-#     def __init__(self,optimizer:torch.optim.Optimizer,learning_rate:float,step_factor:float = 0.1) -> None:
-#         self.optimizer = optimizer
-#         self._steps = 0
-#         self._step_factor = step_factor
-#         self._learning_rate = learning_rate
-#
-#     @property
-#     def learning_rate(self):
-#         return self._learning_rate
-#
-#     def set_learning_rate(self,lr:float) -> None:
-#         for param_group in self.optimizer.param_groups:
-#             param_group['lr'] = lr
-#
-#     def step(self) -> None:
-#         """decreases the learning rate one step"""
-#         lr = self._learning_rate * (self._step_factor**(self._steps))
-#         self.set_learning_rate(lr)
-#         self._steps += 1
-
-
 def plot_progress(train_results: ResultListT, val_results: ResultListT,
                   epoch: int) -> None:
     global output_directory
-    with plt.xkcd():
-        plt.figure()
-        rmse_train = np.array(
-            [train_result.rmse for train_result, _, _ in train_results])
-        rmse_val = np.array(
-            [val_result.rmse for val_result, _, _ in val_results])
-        plt.plot(rmse_train)
-        plt.plot(rmse_val)
-        plt.legend(["rmse train", "rmse val"])
-        plt.title("Training errors")
-        plt.xlabel("epoch")
-        plt.ylabel("error")
-        fn = os.path.join(output_directory, f"progress_plot_{epoch}.png")
-        plt.savefig(fn)
+    plt.figure()
+    rmse_train = np.array(
+        [train_result.rmse for train_result, _, _ in train_results])
+    rmse_val = np.array([val_result.rmse for val_result, _, _ in val_results])
+    plt.plot(rmse_train)
+    plt.plot(rmse_val)
+    plt.legend(["rmse train", "rmse val"])
+    plt.title("Training errors")
+    plt.xlabel("epoch")
+    plt.ylabel("error")
+    fn = os.path.join(output_directory, f"progress_plot_{epoch}.png")
+    plt.savefig(fn)
 
 
 if __name__ == '__main__':
-    main()
+    exit_code = main()
+    sys.exit(exit_code)

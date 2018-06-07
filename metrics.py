@@ -8,14 +8,52 @@ def log10(x):
     return torch.log(x) / math.log(10)
 
 
-class Result(object):
+class MaskedResult(object):
     def __init__(self, mask=Ellipsis):
+        self.mask = mask
+        self.result = Result()
+        self.result_inside = Result()
+        self.result_outside = Result()
+
+    @property
+    def results(self):
+        return [self.result,self.result_inside,self.result_outside]
+
+    def set_to_worst(self):
+        for result in self.results:
+            result.set_to_worst()
+
+    def evaluate(self, output, target):
+        mask_outside = torch.ones_like(output).byte()
+        try:
+            mask_outside[self.mask] = 0  #False
+        except RuntimeError:
+            pass
+        try:
+            output_inside = output[self.mask]
+            target_inside = target[self.mask]
+        except RuntimeError:
+            output_inside = output
+            target_inside = target
+        try:
+            output_outside = output[mask_outside]
+            target_outside = target[mask_outside]
+        except RuntimeError:
+            output_outside = output
+            target_outside = target
+
+        self.result.evaluate(output,target)
+        self.result_inside.evaluate(output_inside,target_inside)
+        self.result_outside.evaluate(output_outside,target_outside)
+        
+class Result(object):
+    def __init__(self):
         self.irmse, self.imae = 0, 0
         self.mse, self.rmse, self.mae = 0, 0, 0
         self.absrel, self.lg10 = 0, 0
         self.delta1, self.delta2, self.delta3 = 0, 0, 0
         self.data_time, self.gpu_time = 0, 0
-        self.mask = mask
+        self.name = ""
 
     def set_to_worst(self):
         self.irmse, self.imae = np.inf, np.inf
@@ -33,11 +71,6 @@ class Result(object):
         self.data_time, self.gpu_time = data_time, gpu_time
 
     def evaluate(self, output, target):
-        try:
-            output = output[self.mask]
-            target = target[self.mask]
-        except ValueError:
-            pass
         valid_mask = target > 0
         output = output[valid_mask]
         target = target[valid_mask]
@@ -63,6 +96,27 @@ class Result(object):
         self.irmse = math.sqrt((torch.pow(abs_inv_diff, 2)).mean())
         self.imae = abs_inv_diff.mean()
 
+        #fix for bug: [PyTorch] Error when printing tensors containing large values #6339
+        self.mse = float(self.mse)
+        self.mae = float(self.mae)
+        self.lg10 = float(self.lg10)
+        self.absrel = float(self.absrel)
+        self.delta1 = float(self.delta1)
+        self.delta2 = float(self.delta2)
+        self.delta3 = float(self.delta3)
+        self.imae = float(self.imae)
+
+    def __str__(self):
+        return (f"{self.name}:\n"
+                f"\tmse = {self.mse}\n"
+                f"\tmae = {self.mae}\n"
+                f"\tlg10 = {self.lg10}\n"
+                f"\tabsrel = {self.absrel}\n"
+                f"\trmse = {self.rmse}\n"
+                f"\tdelta1 = {self.delta1}\n"
+                f"\tdelta2 = {self.delta2}\n"
+                f"\tdelta3 = {self.delta3}\n")
+
 
 class AverageMeter(object):
     def __init__(self):
@@ -79,7 +133,6 @@ class AverageMeter(object):
 
     def update(self, result, gpu_time, data_time, n=1):
         self.count += n
-
         self.sum_irmse += n * result.irmse
         self.sum_imae += n * result.imae
         self.sum_mse += n * result.mse

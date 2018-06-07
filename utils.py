@@ -25,10 +25,8 @@ def merge_into_row(input, target, depth_pred):
     # img_merge.save(output_directory + '/comparison_' + str(epoch) + '.png')
     return img_merge
 
-
 def add_row(img_merge, row):
     return np.vstack([img_merge, row])
-
 
 def save_image(img_merge, filename):
     img_merge = Image.fromarray(img_merge.astype('uint8'))
