@@ -19,7 +19,7 @@ import typing
 import criteria
 import evaluate
 import utils
-from dataloaders import RGBDDataset, choose_dataset_type
+from dataloaders import RGBDDataset, choose_dataset_type, depth_types
 from metrics import AverageMeter, Result, MaskedResult
 from models import SKIP_TYPES, Decoder, ResNet
 
@@ -29,7 +29,7 @@ model_names = ['resnet18', 'resnet50', 'my_resnet18']
 loss_names = ['l1', 'l2']
 data_names = ['nyudepthv2', "SUNRGBD"]
 decoder_names = Decoder.names
-depth_sampling_types = ["sparse", "square"]
+depth_sampling_types = depth_types
 optimizers = ["sgd", "adam"]
 cudnn.benchmark = True
 
@@ -204,6 +204,7 @@ parser.add_argument(
     "if set, train only the top two layers. Only applies if aditionaly using --transfer-from"
 )
 
+
 fieldnames = [
     'mse', 'rmse', 'rmse inside', 'rmse outside', 'absrel', 'absrel inside',
     'absrel outside', 'lg10', 'mae', 'mae inside', 'mae outside', 'delta1',
@@ -232,7 +233,7 @@ def main() -> int:
             f'{args.data}.modality={args.modality}.arch={args.arch}'
             f'.skip={args.skip_type}.decoder={args.decoder}'
             f'.criterion={args.criterion}.lr={args.lr}.bs={args.batch_size}'
-            f'.opt={args.optimizer}')
+            f'.opt={args.optimizer}.depth-type={args.depth_type}')
     args.data = os.path.join(os.environ["DATASET_DIR"], args.data)
     print("output directory :", output_directory)
     if not os.path.exists(output_directory):
@@ -262,7 +263,8 @@ def main() -> int:
         modality=args.modality,
         num_samples=args.num_samples,
         square_width=args.square_width,
-        output_shape=image_shape)
+        output_shape=image_shape,
+        depth_type=args.depth_type)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -280,7 +282,8 @@ def main() -> int:
         modality=args.modality,
         num_samples=args.num_samples,
         square_width=args.square_width,
-        output_shape=image_shape)
+        output_shape=image_shape,
+        depth_type=args.depth_type)
 
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
@@ -536,7 +539,7 @@ def train(train_loader, model, criterion, optimizer,
             print_result(result.result_inside, "result_inside", inside_average_meter)
             print_result(result.result_outside, "result_outside",
                          outside_average_meter)
-        break
+
     avg = average_meter.average()
     avg_inside = inside_average_meter.average()
     avg_outside = outside_average_meter.average()

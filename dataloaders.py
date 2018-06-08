@@ -94,9 +94,9 @@ def downscale(depth_img,pixel_count,std_dev):
 
 
 
+depth_types = ["square","low-quality-square","fixed-lidar"]
 class RGBDDataset(data.Dataset):
     modality_names = ['rgb', 'rgbd', 'd']
-
     def __init__(self,
                  root: str,
                  phase: str,
@@ -105,8 +105,9 @@ class RGBDDataset(data.Dataset):
                  square_width: int = 0,
                  output_shape: Tuple[int, int] = (default_oheight,
                                                   default_owidth),
-                 low_quality_cam=True) -> None:
-        self.low_quality_cam = low_quality_cam
+                 depth_type = depth_types[0]) -> None:
+        self.depth_type = depth_type
+        assert self.depth_type in depth_types
         self.oheight, self.owidth = output_shape
         self.phase = phase
         self.paths = self._get_data_paths(root)
@@ -191,10 +192,14 @@ class RGBDDataset(data.Dataset):
     def create_subsampled_depth(self, depth: np.ndarray) -> np.ndarray:
         depth_subsampled = depth.copy()
         # remove depth values outside center square
-        if self.low_quality_cam:
+        if self.depth_type == "low-quality-square":
             downscale(depth_subsampled,10,0.05)
-        apply_square(self.square, depth_subsampled)
-
+        if "square" in self.depth_type:
+            apply_square(self.square, depth_subsampled)
+        elif self.depth_type == "fixed-lidar":
+            raise NotImplementedError(f"self.depth_type = {self.depth_type} not implemnted")
+        else:
+            raise ValueError(f"Invalid depth type self.depth_type = {self.depth_type}")
         # provide random depth points
 
         return depth_subsampled
