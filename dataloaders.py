@@ -94,7 +94,7 @@ def downscale(depth_img,pixel_count,std_dev):
 
 
 
-depth_types = ["square","low-quality-square","fixed-lidar"]
+depth_types = ["square","low-quality-square"]
 class RGBDDataset(data.Dataset):
     modality_names = ['rgb', 'rgbd', 'd']
     def __init__(self,
@@ -196,8 +196,6 @@ class RGBDDataset(data.Dataset):
             downscale(depth_subsampled,10,0.05)
         if "square" in self.depth_type:
             apply_square(self.square, depth_subsampled)
-        elif self.depth_type == "fixed-lidar":
-            raise NotImplementedError(f"self.depth_type = {self.depth_type} not implemnted")
         else:
             raise ValueError(f"Invalid depth type self.depth_type = {self.depth_type}")
         # provide random depth points

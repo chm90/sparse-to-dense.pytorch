@@ -200,10 +200,7 @@ parser.add_argument(
     "--train-top-only",
     action="store_true",
     default=False,
-    help=
-    "if set, train only the top two layers. Only applies if aditionaly using --transfer-from"
-)
-
+    help="if set, train only the top two layers. Only applies if aditionaly using --transfer-from")
 
 fieldnames = [
     'mse', 'rmse', 'rmse inside', 'rmse outside', 'absrel', 'absrel inside',
@@ -233,7 +230,8 @@ def main() -> int:
             f'{args.data}.modality={args.modality}.arch={args.arch}'
             f'.skip={args.skip_type}.decoder={args.decoder}'
             f'.criterion={args.criterion}.lr={args.lr}.bs={args.batch_size}'
-            f'.opt={args.optimizer}.depth-type={args.depth_type}')
+            f'.opt={args.optimizer}.depth-type={args.depth_type}'
+            f'.square-width={args.square_width}')
     args.data = os.path.join(os.environ["DATASET_DIR"], args.data)
     print("output directory :", output_directory)
     if not os.path.exists(output_directory):
