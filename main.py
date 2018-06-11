@@ -13,6 +13,8 @@ import torch.backends.cudnn as cudnn
 import torch.nn.parallel
 import torch.optim
 import torch.utils.data
+import matplotlib
+matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
 import typing

@@ -17,6 +17,9 @@ from torchvision.datasets.folder import IMG_EXTENSIONS
 from torchvision.transforms import transforms as trans
 from torchvision.transforms import functional as t
 
+import matplotlib
+matplotlib.use("Agg")
+from matplotlib import pyplot as plt
 
 def get_im_filename(folder):
     im_paths = (
@@ -246,7 +249,7 @@ def scale_depth_image(image: np.ndarray) -> np.ndarray:
 
 
 def plot(feature=None, target=None, prediction=None):
-    from matplotlib import pyplot as plt
+
     fig, [[ax1, ax2], [ax3, ax4]] = plt.subplots(2, 2)
     if feature is not None:
         feature = np.asarray(feature)
@@ -271,7 +274,6 @@ def plot(feature=None, target=None, prediction=None):
     return fig
 
 def compute_sunrgbd__metrics(dataset):
-    from matplotlib import pyplot as plt
 
     for i in range(len(dataset)):
         dataset[i]
@@ -279,8 +281,6 @@ def compute_sunrgbd__metrics(dataset):
 
 def main():
     dataset = SUNRGBDDataset(sys.argv[1], square_provider=center_square_50,modality="rgbd")
-
-    from matplotlib import pyplot as plt
     i = 0
     # while True:
 

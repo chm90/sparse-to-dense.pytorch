@@ -4,6 +4,8 @@ from typing import List, Type, Iterable
 
 import numpy as np
 import torch
+import matplotlib
+matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 from torch import nn
 from itertools import chain

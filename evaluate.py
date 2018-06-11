@@ -153,8 +153,8 @@ class Evaluator(object):
             50, (0., 100.), self.square, np.asarray(self._predictions),
             np.asarray(self._targets))
         import matplotlib
-        if matplotlib.get_backend() != "agg":
-            matplotlib.use("agg")
+        if matplotlib.get_backend() != "Agg":
+            matplotlib.use("Agg")
         from matplotlib import pyplot as plt
         plt.figure()
         plt.plot(edges, hist_mae)
@@ -168,8 +168,8 @@ class Evaluator(object):
 
     def plot(self):
         import matplotlib
-        if matplotlib.get_backend() != "agg":
-            matplotlib.use("agg")
+        if matplotlib.get_backend() != "Agg":
+            matplotlib.use("Agg")
         from matplotlib import pyplot as plt
         self.draw_plots()
         plt.show()
@@ -177,7 +177,7 @@ class Evaluator(object):
     def save_plot(self, path):
         self.draw_plots()
         import matplotlib
-        if matplotlib.get_backend() != "agg":
-            matplotlib.use("agg")
+        if matplotlib.get_backend() != "Agg":
+            matplotlib.use("Agg")
         from matplotlib import pyplot as plt
         plt.savefig(path)
