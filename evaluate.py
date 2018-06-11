@@ -60,12 +60,12 @@ def compute_distance_map(image_shape, square):
     return distance_map
 
 
-@njit(
-    types.UniTuple(float64[:], 5)(int64, rangeT, squareT, imagesT, imagesT),
-    locals={
-        "errors_flat": float64[:, :],
-        "distance_map": float64[:]
-    })
+#@njit(
+#    types.UniTuple(float64[:], 5)(int64, rangeT, squareT, imagesT, imagesT),
+#    locals={
+#        "errors_flat": float64[:, :],
+#        "distance_map": float64[:]
+#    })
 def create_histogram(bins, distance_range, square, predictions, targets):
     start, end = distance_range
     width, height = targets.shape[1:]
@@ -100,9 +100,6 @@ def create_histogram(bins, distance_range, square, predictions, targets):
         first_i = i
         while i < len(distances) and distances[i] <= edge:
             i += 1
-
-        assert i != first_i, "must have taken some i"
-
         n_idxs = i - first_i
         #2. extract values for every error maps
         edge_predictions = np.empty(predictions_flat.shape[0] * n_idxs)
@@ -120,10 +117,9 @@ def create_histogram(bins, distance_range, square, predictions, targets):
         hist_mae[e] = edge_abs_diff.mean()
         hist_rel[e] = (edge_abs_diff / edge_targets).mean()
         hist_rmse[e] = sqrt((edge_abs_diff**2).mean())
-        hist_delta1[e] = (maxRatio < 1.25).astype(float64).mean()
+        hist_delta1[e] = (maxRatio < 1.25).astype(float).mean()
 
     return np.array(edges), hist_mae, hist_rel, hist_rmse, hist_delta1
-
 
 class Evaluator(object):
     def __init__(self, output_shape, square_width):
@@ -150,8 +146,7 @@ class Evaluator(object):
         #Interleave sorted error arrays to create one long sorted error array
 
         edges, hist_mae, hist_rel, hist_rmse, hist_delta1 = create_histogram(
-            50, (0., 100.), self.square, np.asarray(self._predictions),
-            np.asarray(self._targets))
+            50, (0., 100.), self.square, np.asarray(self._predictions),np.asarray(self._targets))
         import matplotlib
         if matplotlib.get_backend() != "Agg":
             matplotlib.use("Agg")

@@ -21,15 +21,13 @@ import typing
 import criteria
 import evaluate
 import utils
-from dataloaders import RGBDDataset, choose_dataset_type, depth_types
+from dataloaders import choose_dataset_type, depth_types, modalities, data_names
 from metrics import AverageMeter, Result, MaskedResult
 from models import SKIP_TYPES, Decoder, ResNet
-
 ResultListT = List[Tuple[Result, Result, Result]]
-modality_names = RGBDDataset.modality_names
+modality_names = modalities
 model_names = ['resnet18', 'resnet50', 'my_resnet18']
 loss_names = ['l1', 'l2']
-data_names = ['nyudepthv2', "SUNRGBD"]
 decoder_names = Decoder.names
 depth_sampling_types = depth_types
 optimizers = ["sgd", "adam"]
@@ -532,7 +530,6 @@ def train(train_loader, model, criterion, optimizer,
             print_result(result.result_inside, "result_inside", inside_average_meter)
             print_result(result.result_outside, "result_outside",
                          outside_average_meter)
-
     avg = average_meter.average()
     avg_inside = inside_average_meter.average()
     avg_outside = outside_average_meter.average()
@@ -609,9 +606,9 @@ def validate(val_loader,
             img_merge = None
         else:
             if i == 0:
-                img_merge = utils.merge_into_row(input, target, depth_pred)
+                img_merge = utils.merge_ims_into_row([input, target, depth_pred],rgbd_action="both")
             elif (i < 8 * skip) and (i % skip == 0):
-                row = utils.merge_into_row(input, target, depth_pred)
+                row = utils.merge_ims_into_row([input, target, depth_pred],rgbd_action="both")
                 img_merge = utils.add_row(img_merge, row)
             elif i == 8 * skip:
                 filename = output_directory + '/comparison_' + str(

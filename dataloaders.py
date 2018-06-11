@@ -13,7 +13,9 @@ import transforms
 import torchvision
 from metrics import Result, AverageMeter
 from sys import stdout
-from numba import njit, float64, types, int64, float32,none
+from numba import njit, float64, types, int64, float32, none
+import cv2
+
 IMG_EXTENSIONS = [
     '.h5',
 ]
@@ -75,37 +77,38 @@ def apply_square(square: SquareShape,
     return image
 
 
-@njit(none(float32[:,:],int64,float64))
-def downscale(depth_img,pixel_count,std_dev):
-    x_max,y_max = depth_img.shape
-    x_steps = list(range(0,x_max,pixel_count))
+@njit(none(float32[:, :], int64, float64))
+def downscale(depth_img, pixel_count, std_dev):
+    x_max, y_max = depth_img.shape
+    x_steps = list(range(0, x_max, pixel_count))
     if x_steps[-1] != x_max:
         x_steps.append(x_max)
-    x_ranges = list(zip(x_steps,x_steps[1:]))
-    y_steps = list(range(0,y_max,pixel_count))
+    x_ranges = list(zip(x_steps, x_steps[1:]))
+    y_steps = list(range(0, y_max, pixel_count))
     if y_steps[-1] != y_max:
         y_steps.append(y_max)
-    y_ranges = list(zip(y_steps,y_steps[1:]))
+    y_ranges = list(zip(y_steps, y_steps[1:]))
     for xlow, xhigh in x_ranges:
         for ylow, yhigh in y_ranges:
-             new_depth = depth_img[xlow:xhigh,ylow:yhigh].mean()
-             new_depth = np.random.normal(new_depth, std_dev * new_depth)
-             depth_img[xlow:xhigh,ylow:yhigh] = new_depth
+            new_depth = depth_img[xlow:xhigh, ylow:yhigh].mean()
+            new_depth = np.random.normal(new_depth, std_dev * new_depth)
+            depth_img[xlow:xhigh, ylow:yhigh] = new_depth
 
 
+depth_types = ["full", "square", "low-quality-square","single-pixel"]
+modalities = ['rgb', 'rgbd', 'd']
 
-depth_types = ["square","low-quality-square"]
+
 class RGBDDataset(data.Dataset):
-    modality_names = ['rgb', 'rgbd', 'd']
     def __init__(self,
                  root: str,
                  phase: str,
-                 modality: str = 'rgb',
+                 modality: str = modalities[0],
                  num_samples: int = 0,
                  square_width: int = 0,
                  output_shape: Tuple[int, int] = (default_oheight,
                                                   default_owidth),
-                 depth_type = depth_types[0]) -> None:
+                 depth_type=depth_types[0]) -> None:
         self.depth_type = depth_type
         assert self.depth_type in depth_types
         self.oheight, self.owidth = output_shape
@@ -125,7 +128,7 @@ class RGBDDataset(data.Dataset):
             raise (RuntimeError("Invalid dataset phase: " + self.phase + "\n"
                                 "Supported dataset phases are: train, val"))
 
-        if modality in self.modality_names:
+        if modality in modalities:
             self.modality = modality
             if modality in ['rgbd', 'd', 'gd']:
                 self.num_samples = num_samples
@@ -134,9 +137,9 @@ class RGBDDataset(data.Dataset):
                 self.num_samples = 0
                 self.square_width = 0
         else:
-            raise (RuntimeError("Invalid modality type: " + modality + "\n"
-                                "Supported dataset types are: " +
-                                ''.join(self.modality_names)))
+            raise (RuntimeError(
+                "Invalid modality type: " + modality + "\n"
+                "Supported dataset types are: " + ''.join(modalities)))
 
     @property
     def output_shape(self) -> Tuple[int, int]:
@@ -190,17 +193,41 @@ class RGBDDataset(data.Dataset):
         return rgb, depth_raw, depth_fix
 
     def create_subsampled_depth(self, depth: np.ndarray) -> np.ndarray:
-        depth_subsampled = depth.copy()
         # remove depth values outside center square
         if self.depth_type == "low-quality-square":
-            downscale(depth_subsampled,10,0.05)
-        if "square" in self.depth_type:
-            apply_square(self.square, depth_subsampled)
-        else:
-            raise ValueError(f"Invalid depth type self.depth_type = {self.depth_type}")
-        # provide random depth points
+            depth = depth.copy()
+            downscale(depth, 10, 0.05)
 
+        if "square" in self.depth_type:
+            depth_subsampled = depth.copy()
+            apply_square(self.square, depth_subsampled)
+        elif "full" == self.depth_type:
+            if self.num_samples > 0:
+                depth_subsampled = self.dense_to_sparse(depth)
+                kernel = np.ones((3,3),np.uint8)
+                depth_subsampled = cv2.dilate(depth_subsampled,kernel,iterations = 1)
+            else:
+                depth_subsampled = depth
+        elif "single-pixel" == self.depth_type:
+            depth_subsampled = np.zeros_like(depth)
+            x_size,y_size = depth_subsampled.shape[:2]
+            center_x,center_y = x_size // 2,y_size // 2
+            depth_subsampled[center_x,center_y] = depth[center_x,center_y]
+            #depth_subsampled[center_x -50 : center_x + 50,center_y -50: center_y + 50] = depth[center_x,center_y]
+            #depth_subsampled[center_x -50 : center_x ,center_y -50: center_y] = depth[center_x,center_y] / 2
+        else:
+            raise ValueError(
+                f"Invalid depth type self.depth_type = {self.depth_type}")
+
+        # provide random depth points
         return depth_subsampled
+
+    def dense_to_sparse(self, depth):
+        prob = float(self.num_samples) / depth.size
+        mask_keep = np.random.uniform(0, 1, depth.shape) < prob
+        new_depth = np.zeros_like(depth)
+        new_depth[mask_keep] = depth[mask_keep]
+        return new_depth
 
     def create_rgbd(self, rgb: np.ndarray, depth: np.ndarray) -> np.ndarray:
         sparse_depth = self.create_subsampled_depth(depth)
