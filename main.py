@@ -211,7 +211,6 @@ fieldnames = [
 best_result = Result()
 best_result.set_to_worst()
 
-
 def main() -> int:
     global args, best_result, output_directory, train_csv, test_csv
     args = parser.parse_args()
@@ -225,13 +224,7 @@ def main() -> int:
     if args.transfer_from:
         output_directory = f"{args.transfer_from}_transfer"
     else:
-        output_directory = os.path.join(
-            args.output_dir,
-            f'{args.data}.modality={args.modality}.arch={args.arch}'
-            f'.skip={args.skip_type}.decoder={args.decoder}'
-            f'.criterion={args.criterion}.lr={args.lr}.bs={args.batch_size}'
-            f'.opt={args.optimizer}.depth-type={args.depth_type}'
-            f'.square-width={args.square_width}')
+        output_directory = utils.get_output_dir(args)
     args.data = os.path.join(os.environ["DATASET_DIR"], args.data)
     print("output directory :", output_directory)
     if not os.path.exists(output_directory):

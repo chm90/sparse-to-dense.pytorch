@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
-
+import os
 cmap = plt.cm.jet
 
 def merge_into_row(input, target, depth_pred):
@@ -31,3 +31,12 @@ def add_row(img_merge, row):
 def save_image(img_merge, filename):
     img_merge = Image.fromarray(img_merge.astype('uint8'))
     img_merge.save(filename)
+
+def get_output_dir(args):
+    return os.path.join(
+        args.output_dir,
+        f'{args.data}.modality={args.modality}.arch={args.arch}'
+        f'.skip={args.skip_type}.decoder={args.decoder}'
+        f'.criterion={args.criterion}.lr={args.lr}.bs={args.batch_size}'
+        f'.opt={args.optimizer}.depth-type={args.depth_type}'
+        f'.square-width={args.square_width}')

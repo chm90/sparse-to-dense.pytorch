@@ -14,7 +14,7 @@ from dataloaders import SquareShape
 from utils import add_row, save_image
 parser = argparse.ArgumentParser(
     description=
-    "Find the images with the greates difference in loss in a dataset between two models give a csv off losses for both models"
+    "Find the images with the greates difference in loss in a dataset between two models give a checkpoint for each model"
 )
 parser.add_argument("first_model_checkpoint", type=str)
 parser.add_argument("second_model_checkpoint", type=str)
