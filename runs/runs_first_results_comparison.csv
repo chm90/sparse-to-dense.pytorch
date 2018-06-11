@@ -1,0 +1,2 @@
+#first_csv ,#second_csv , --first-name, --second-name,--loss-name, --square-width
+results__newer/nyudepthv2.modality\=rgbd.arch\=resnet50.skip\=sum.decoder\=deconv3.criterion\=l1.lr\=0.01.bs\=16.opt\=sgd/validation_rmses.csv, results__newer/nyudepthv2.modality\=rgb.arch\=resnet50.skip\=none.decoder\=deconv3.criterion\=l1.lr\=0.01.bs\=16.opt\=sgd/validation_rmses.csv, "rgbd resnet50 skip", "rgb resnet50", "rmse", 50

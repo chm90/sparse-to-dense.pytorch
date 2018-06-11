@@ -1,0 +1,9 @@
+--arch, --modality, --decoder, --skip-type, --optimizer, --epochs
+resnet18, rgbd, deconv3, none, sgd, 15
+resnet18, rgb, deconv3, none, sgd, 15
+resnet18, rgbd, deconv3, none, adam, 100
+resnet18, rgbd, deconv3, cat, adam, 100
+resnet18, rgbd, deconv3, sum, adam, 100
+resnet18, rgb, deconv3, none, adam, 100
+resnet18, rgb, deconv3, cat, adam, 100
+resnet18, rgb, deconv3, sum, adam, 100
