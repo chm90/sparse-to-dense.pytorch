@@ -153,7 +153,7 @@ class UpConv(Decoder):
 
 
 class UpProj(Decoder):
-    # UpProj decoder consists of 4 upproj modules with decreasing number of channels and increasing feature map size
+    # UpProj decoder consists of 4 upproj modules with decreasing number of channels and increasing feature map sizes
 
     class UpProjModule(nn.Module):
         # UpProj module has two branches, with a Unpool at the start and a ReLu at the end

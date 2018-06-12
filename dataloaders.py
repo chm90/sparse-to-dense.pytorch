@@ -95,7 +95,10 @@ def downscale(depth_img, pixel_count, std_dev):
             depth_img[xlow:xhigh, ylow:yhigh] = new_depth
 
 
-depth_types = ["full", "square", "low-quality-square","single-pixel"]
+depth_types = [
+    "full", "square", "low-quality-square", "single-pixel",
+    "single-pixel-low-quality"
+]
 modalities = ['rgb', 'rgbd', 'd']
 
 
@@ -114,8 +117,6 @@ class RGBDDataset(data.Dataset):
         self.oheight, self.owidth = output_shape
         self.phase = phase
         self.paths = self._get_data_paths(root)
-        self.square = center_square((self.oheight, self.owidth), square_width,
-                                    square_width)
         if len(self.paths) == 0:
             raise (RuntimeError(
                 "Found 0 images in subfolders of: " + root + "\n"
@@ -140,6 +141,16 @@ class RGBDDataset(data.Dataset):
             raise (RuntimeError(
                 "Invalid modality type: " + modality + "\n"
                 "Supported dataset types are: " + ''.join(modalities)))
+
+    @property
+    def square_width(self) -> int:
+        return self._square_width
+
+    @square_width.setter
+    def square_width(self, value: int) -> None:
+        self._square_width = value
+        self.square = center_square((self.oheight, self.owidth), self._square_width,
+                                    self._square_width)
 
     @property
     def output_shape(self) -> Tuple[int, int]:
@@ -194,7 +205,7 @@ class RGBDDataset(data.Dataset):
 
     def create_subsampled_depth(self, depth: np.ndarray) -> np.ndarray:
         # remove depth values outside center square
-        if self.depth_type == "low-quality-square":
+        if self.depth_type == "low-quality-square" or self.depth_type == "single-pixel-low-quality":
             depth = depth.copy()
             downscale(depth, 10, 0.05)
 
@@ -204,15 +215,19 @@ class RGBDDataset(data.Dataset):
         elif "full" == self.depth_type:
             if self.num_samples > 0:
                 depth_subsampled = self.dense_to_sparse(depth)
-                kernel = np.ones((3,3),np.uint8)
-                depth_subsampled = cv2.dilate(depth_subsampled,kernel,iterations = 1)
+                kernel = np.ones((3, 3), np.uint8)
+                depth_subsampled = cv2.dilate(
+                    depth_subsampled, kernel, iterations=1)
             else:
                 depth_subsampled = depth
-        elif "single-pixel" == self.depth_type:
+        elif "single-pixel" in self.depth_type:
             depth_subsampled = np.zeros_like(depth)
-            x_size,y_size = depth_subsampled.shape[:2]
-            center_x,center_y = x_size // 2,y_size // 2
-            depth_subsampled[center_x,center_y] = depth[center_x,center_y]
+            x_size, y_size = depth_subsampled.shape[:2]
+            center_x, center_y = x_size // 2, y_size // 2
+            depth_subsampled[center_x, center_y] = depth[center_x, center_y]
+            kernel = np.ones((3, 3), np.uint8)
+            depth_subsampled = cv2.dilate(
+                depth_subsampled, kernel, iterations=1)
             #depth_subsampled[center_x -50 : center_x + 50,center_y -50: center_y + 50] = depth[center_x,center_y]
             #depth_subsampled[center_x -50 : center_x ,center_y -50: center_y] = depth[center_x,center_y] / 2
         else:

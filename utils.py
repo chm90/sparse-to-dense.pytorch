@@ -4,8 +4,8 @@ from PIL import Image
 import os
 cmap = plt.cm.jet
 import torch
-from itertools import chain
-from typing import List, Iterable, Callable
+from itertools import chain,repeat
+from typing import List, Iterable, Callable, Union, Optional
 from dataloaders import SquareShape
 
 def process_depth(depth: torch.Tensor, depth_bias: float,
@@ -61,8 +61,7 @@ def image_type(image):
 
 def merge_ims_into_row(images: List[torch.cuda.FloatTensor],
                        rgbd_action: str = "both",
-                       images_with_square= None,
-                       square:SquareShape = None) -> np.ndarray:
+                       square:Optional[Union[Optional[SquareShape],List[Optional[SquareShape]]]] = None) -> np.ndarray:
     for image in images:
         assert image.dim(
         ) == 4, f"invalid number of dimensions, expected 4, was {image.dim()} "
@@ -91,11 +90,14 @@ def merge_ims_into_row(images: List[torch.cuda.FloatTensor],
         images_np))
 
     if square is not None:
-        for image_with_square,processed_image in zip(images_with_square,processed_images):
-            if image_with_square:
-                paint_square(processed_image,square)
-    elif images_with_square is not None:
-        raise ValueError(f"Must define 'images_with_square' if 'square' is given. images_with_square: {images_with_square}")
+        squares : Iterable[SquareShape]
+        if isinstance(square,List):
+            squares = square
+        else:
+            squares = repeat(square)
+        for sq,processed_image in zip(squares,processed_images):
+            if sq is not None:
+                paint_square(processed_image,sq)
 
     im_row = np.hstack(tuple(processed_images))
     return im_row
