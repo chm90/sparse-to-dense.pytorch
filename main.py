@@ -601,7 +601,6 @@ def validate(
     for i, (input, target) in enumerate(val_loader):
         input, target = input.cuda(), target.cuda()
         input_var = torch.autograd.Variable(input)
-        target_var = torch.autograd.Variable(target)
         torch.cuda.synchronize()
         data_time = time.time() - end
 

@@ -1,52 +1,54 @@
 import argparse
 import os
-from typing import List, Type, Iterable
+from typing import Iterable, List, Type
 
+import matplotlib
 import numpy as np
 import torch
-import matplotlib
-matplotlib.use("Agg")
-from matplotlib import pyplot as plt
 from torch import nn
-from itertools import chain
-from dataloaders import NYUDataset, RGBDDataset
+
+from dataloaders import NYUDataset
+from main import parser as model_parser
 from metrics import MaskedResult
 from models import ResNet
-from dataloaders import SquareShape
-from utils import add_row, save_image, get_output_dir
+from utils import add_row, get_output_dir, merge_ims_into_row, save_image
 
-from main import parser as model_parser
-parser = argparse.ArgumentParser(add_help=False,
+matplotlib.use("Agg")
+from matplotlib import pyplot as plt
+parser = argparse.ArgumentParser(
+    add_help=False,
     description=
     "Find the images with the greates difference in loss in a dataset between two models give a checkpoint for each model",
-    parents=[model_parser]
-)
+    parents=[model_parser])
 parser.add_argument("--depth-name", type=str, default="depth")
 parser.add_argument("--rgb-name", type=str, default="rgb")
-parser.add_argument(
-    "--out-dir",
-    "-od",
-    type=str,
-    metavar="RUN-NAME",
-    default=None,
-    help="Name of output directory")
 parser.add_argument(
     "--imrows",
     type=int,
     default=10,
     help="Number of rows that are printed to the output images")
 
-
 data_names = ['nyudepthv2', "SUNRGBD"]
 
+rgbd_model_locations = {
+    "no-skip":
+    (r"results__newer/nyudepthv2.modality=rgb.arch=resnet50.skip=none.decoder=deconv3.criterion=l1."
+     r"lr=0.01.bs=16.opt=sgd.depth-type=low-quality-square.square-width=50/model_best.pth.tar"
+     ),
+}
+parser.add_argument(
+    "--rgb-model-kind",
+    choices=rgbd_model_locations.keys(),
+    type=str,
+    help=
+    "The kind of rgb model to use for training. The locations of these rgb models are defined in the script file."
+)
 
 
-def evaluate(
-        model: Type[nn.Module],
-        dataloader: Type[torch.utils.data.DataLoader]) -> List[MaskedResult]:
+def evaluate(model: Type[nn.Module],
+             dataloader: torch.utils.data.DataLoader) -> List[MaskedResult]:
     results = []
     for i, (x, y) in enumerate(dataloader):
-        # For some reason, mypy doesn't recognize that RGBDDataset is indexable
         x, y = x.cuda(), y.cuda()
         y_hat = model(x)
         result = MaskedResult(dataloader.dataset.mask_inside_square)
@@ -58,14 +60,12 @@ def evaluate(
 def main() -> None:
     args = parser.parse_args()
     #Load model
-    rgb_checkpoint_fn_no_skip = r"results__newer/nyudepthv2.modality=rgb.arch=resnet50.skip=none.decoder=deconv3.criterion=l1.lr=0.01.bs=16.opt=sgd.depth-type=low-quality-square.square-width=50/model_best.pth.tar"
-    rgb_checkpoint_fn_skip = r"results__newer/nyudepthv2.modality=rgbd.arch=resnet50.skip=none.decoder=deconv3.criterion=l1.lr=0.01.bs=16.opt=sgd.depth-type=low-quality-square.square-width=50/model_best.pth.tar"
     depth_model_dir = get_output_dir(args)
-    print("args.output_dir =",args.output_dir)
-    print("depth_model_dir =",depth_model_dir)
-    depth_model_cp_fn = os.path.join(depth_model_dir,"model_best.pth.tar")
+    print("args.output_dir =", args.output_dir)
+    print("depth_model_dir =", depth_model_dir)
+    depth_model_cp_fn = os.path.join(depth_model_dir, "model_best.pth.tar")
     depth_model_cp = torch.load(depth_model_cp_fn)
-    rgb_model_cp = torch.load(rgb_checkpoint_fn_no_skip)
+    rgb_model_cp = torch.load(rgbd_model_locations[args.rgb_model_kind])
     args.data = os.path.join(  #type:ignore
         os.environ["DATASET_DIR"], args.data)
 
@@ -98,14 +98,13 @@ def main() -> None:
     depth_results = evaluate(depth_model, val_dataloader_rgbd
                              if depth_model_is_rgbd else val_dataloader_rgb)
     rgb_results = evaluate(rgb_model, val_dataloader_rgbd
-                              if rgb_model_is_rgbd else val_dataloader_rgb)
+                           if rgb_model_is_rgbd else val_dataloader_rgb)
     sort_metric_depth = np.array([(result.result_outside if depth_model_is_rgbd
                                    else result.result).absrel
                                   for result in depth_results])
-    sort_metric_rgb = np.array([(result.result_outside
-                                    if rgb_model_is_rgbd else
-                                    result.result).absrel
-                                   for result in rgb_results])
+    sort_metric_rgb = np.array([(result.result_outside if rgb_model_is_rgbd
+                                 else result.result).absrel
+                                for result in rgb_results])
     ratio = sort_metric_depth / sort_metric_rgb
     acending_ratio_idxs = np.argsort(ratio)
     decending_ratio_idxs = np.flip(acending_ratio_idxs, 0)
@@ -158,9 +157,10 @@ def main() -> None:
                                       if depth_model_is_rgbd else x_rgb)
 
             y_hat_rgb = rgb_model(x_rgbd  # type: ignore
-                                        if rgb_model_is_rgbd else x_rgb)
-            row = merge_into_row(x_rgbd, val_dataset_rgbd.square, y,
-                                 y_hat_depth, y_hat_rgb)
+                                  if rgb_model_is_rgbd else x_rgb)
+            images = [x_rgbd,y,y_hat_depth,y_hat_rgb]
+            squares = [val_dataset_rgbd.square] * len(images)
+            row = merge_ims_into_row(images,square=squares)
             im_merge = row if im_merge is None else add_row(im_merge, row)
         return im_merge
 
@@ -170,51 +170,49 @@ def main() -> None:
     depth_model_worst_im = draw_images(decending_ratio_idxs[:args.imrows])
     print("depth_model_worst_im ratios =",
           ratio[decending_ratio_idxs[:args.imrows]])
-    print("args.out_dir =",args.out_dir)
+
     if not os.path.isdir(args.out_dir):
         os.makedirs(args.out_dir)
     save_image(depth_model_best_im,
-               os.path.join(args.out_dir, f"{args.depth_name}_best.png"))
+               os.path.join(depth_model_dir, f"{args.depth_name}_best.png"))
     save_image(depth_model_worst_im,
-               os.path.join(args.out_dir, f"{args.depth_name}_worst.png"))
+               os.path.join(depth_model_dir, f"{args.depth_name}_worst.png"))
 
 
 cmap = plt.cm.jet
 
-
-def merge_into_row(input: torch.Tensor, square: SquareShape,
-                   target: torch.Tensor, depth_prediction: torch.Tensor,
-                   rgb_prediction: torch.Tensor) -> torch.Tensor:
-
-    rgb = input[:, :3, :, :]
-    rgb = 255 * np.transpose(np.squeeze(rgb.cpu().numpy()), (1, 2, 0))
-    d = input[:, 3, :, :]
-    depth_ims = [d, target, depth_prediction, rgb_prediction]
-    depth_ims = list(
-        map(lambda d_im: np.squeeze(d_im.data.cpu().numpy()), depth_ims))
-    mean = min(map(lambda d_im: np.min(d_im), depth_ims))
-    scale = max(map(lambda d_im: np.max(d_im) - np.min(d_im), depth_ims))
-
-    def process_depth(depth: torch.Tensor) -> torch.Tensor:
-        depth = (depth - mean) / scale
-        depth = 255 * cmap(depth)[:, :, :3]  # H, W, C
-        return depth
-
-    xmin, xmax, ymin, ymax = square
-
-    def paint_square(image: np.ndarray) -> np.ndarray:
-        image[xmin:xmax, ymin - 1:ymin + 1, :] = 255
-        image[xmin:xmax, ymax - 1:ymax + 1, :] = 255
-        image[xmin - 1:xmin + 1, ymin:ymax, :] = 255
-        image[xmax - 1:xmax + 1, ymin:ymax, :] = 255
-        return image
-
-    depth_ims = list(map(process_depth, depth_ims))
-    ims = list(map(paint_square, chain([rgb], depth_ims)))
-    img_merge = np.hstack(ims)
-
-    return img_merge
-
+#def merge_into_row(input: torch.Tensor, square: SquareShape,
+#                   target: torch.Tensor, depth_prediction: torch.Tensor,
+#                   rgb_prediction: torch.Tensor) -> torch.Tensor:
+#
+#    rgb = input[:, :3, :, :]
+#    rgb = 255 * np.transpose(np.squeeze(rgb.cpu().numpy()), (1, 2, 0))
+#    d = input[:, 3, :, :]
+#    depth_ims = [d, target, depth_prediction, rgb_prediction]
+#    depth_ims = list(
+#        map(lambda d_im: np.squeeze(d_im.data.cpu().numpy()), depth_ims))
+#    mean = min(map(lambda d_im: np.min(d_im), depth_ims))
+#    scale = max(map(lambda d_im: np.max(d_im) - np.min(d_im), depth_ims))
+#
+#    def process_depth(depth: torch.Tensor) -> torch.Tensor:
+#        depth = (depth - mean) / scale
+#        depth = 255 * cmap(depth)[:, :, :3]  # H, W, C
+#        return depth
+#
+#    xmin, xmax, ymin, ymax = square
+#
+#    def paint_square(image: np.ndarray) -> np.ndarray:
+#        image[xmin:xmax, ymin - 1:ymin + 1, :] = 255
+#        image[xmin:xmax, ymax - 1:ymax + 1, :] = 255
+#        image[xmin - 1:xmin + 1, ymin:ymax, :] = 255
+#        image[xmax - 1:xmax + 1, ymin:ymax, :] = 255
+#        return image
+#
+#    depth_ims = list(map(process_depth, depth_ims))
+#    ims = list(map(paint_square, chain([rgb], depth_ims)))
+#    img_merge = np.hstack(ims)
+#
+#    return img_merge
 
 if __name__ == "__main__":
     main()

@@ -149,12 +149,18 @@ class RGBDDataset(data.Dataset):
     @square_width.setter
     def square_width(self, value: int) -> None:
         self._square_width = value
-        self.square = center_square((self.oheight, self.owidth), self._square_width,
-                                    self._square_width)
+        self.square = center_square((self.oheight, self.owidth),
+                                    self._square_width, self._square_width)
 
     @property
     def output_shape(self) -> Tuple[int, int]:
         return self.oheight, self.owidth
+
+    @output_shape.setter
+    def output_shape(self, value: Tuple[int, int]) -> None:
+        self.oheight, self.owidth = value
+        assert self.oheight >= 0
+        assert self.owidth >= 0
 
     @property
     def mask_inside_square(self) -> Tuple[slice, slice, slice, slice]:
