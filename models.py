@@ -46,8 +46,8 @@ def weights_init(m):
         m.bias.data.zero_()
 
 
+SKIP_TYPES = ["none", "cat", "sum", "proj"]
 
-SKIP_TYPES = ["none", "cat", "sum","proj"]
 
 class Decoder(nn.Module):
     # Decoder is the base class for all decoders
@@ -56,13 +56,15 @@ class Decoder(nn.Module):
 
     def __init__(self, skip_type, additional_input_ch):
         super(Decoder, self).__init__()
-        assert(skip_type in SKIP_TYPES)
+        assert (skip_type in SKIP_TYPES)
         self.skip_type = skip_type
         self.additional_input_ch = additional_input_ch
         self.layer1 = None
         self.layer2 = None
         self.layer3 = None
         self.layer4 = None
+        if self.skip_type == "proj":
+            self.proj_layers = dict()
 
     def skip(self, x, x_):
         if self.skip_type == "none" or x_ is None:
@@ -70,30 +72,32 @@ class Decoder(nn.Module):
         if self.skip_type == "cat":
             return cat([x, x_], dim=1)
         if self.skip_type == "sum":
-            x_chans = x.shape[1]
-            return x + x_[:, :x_chans, :, :]
+            return x + x_[:, :x.shape[1], :, :]
         if self.skip_type == "proj":
-            raise NotImplementedError()
-    
+            layer_key = (x_.shape[1], x.shape[1])
+            if not layer_key in self.proj_layers.keys():
+                self.proj_layers[layer_key] = nn.Conv2d(
+                    x_.shape[1], x.shape[1], 1, bias=None)
+                self.proj_layers[layer_key].cuda()
+            return x + self.proj_layers[layer_key](x_)
         raise ValueError(f"Invalid skip_type, {self.skip_type}")
-        
 
     def forward(self, x, x1=None, x2=None, x3=None, x4=None, x5=None):
         x = self.skip(x, x1)
         x = self.layer1(x)
-        print("decoder layer1 output shape =", x.shape)
+        #print("decoder layer1 output shape =", x.shape)
         # print("x2.shape =",x2.shape)
 
         x = self.skip(x, x2)
         x = self.layer2(x)
-        print("decoder layer2 output shape =", x.shape)
-        print("x3.shape =",x3.shape)
+        #print("decoder layer2 output shape =", x.shape)
+        #print("x3.shape =", x3.shape)
         x = self.skip(x, x3)
         x = self.layer3(x)
-        print("decoder layer3 output shape =", x.shape)
+        #print("decoder layer3 output shape =", x.shape)
         x = self.skip(x, x4)
         x = self.layer4(x)
-        print("decoder layer4 output shape =", x.shape)
+        #print("decoder layer4 output shape =", x.shape)
         x = self.skip(x, x5)
         return x
 
@@ -335,43 +339,43 @@ class ResNet(nn.Module):
     def forward(self, x: torch.cuda.FloatTensor):
         # resnet
         assert x.shape[1:] == self.input_shape
-        print("input shape =", x.shape)
+        #print("input shape =", x.shape)
         x0 = self.conv1(x)
         self.conv1.output_shape = tuple(x0.shape[1:])
-        print("conv1 shape =", x0.shape)
+        #print("conv1 shape =", x0.shape)
         x = self.bn1(x0)
         x = self.relu(x)
         x = self.maxpool(x)
-        print("maxpool output shape =", x.shape)
+        #print("maxpool output shape =", x.shape)
         self.maxpool.output_shape = tuple(x.shape[1:])
         x1 = self.layer1(x)
         self.layer1.output_shape = tuple(x1.shape[1:])
-        print("layer1 output shape =", x1.shape)
+        #print("layer1 output shape =", x1.shape)
 
         x2 = self.layer2(x1)
         self.layer2.output_shape = tuple(x2.shape[1:])
-        print("layer2 output shape =", x2.shape)
+        #print("layer2 output shape =", x2.shape)
 
         x3 = self.layer3(x2)
         self.layer3.output_shape = tuple(x3.shape[1:])
-        print("layer3 output shape =", x3.shape)
+        #print("layer3 output shape =", x3.shape)
 
         x4 = self.layer4(x3)
         self.layer4.output_shape = tuple(x4.shape[1:])
-        print("layer4 output shape =", x4.shape)
+        #print("layer4 output shape =", x4.shape)
         x = self.conv2(x4)
         self.conv2.output_shape = tuple(x.shape[1:])
-        print("conv2 output shape =", x.shape)
+        #print("conv2 output shape =", x.shape)
 
         x = self.bn2(x)
         # decoder
         x = self.decoder(x, x2=x3, x3=x2, x4=x1)
         self.decoder.output_shape = tuple(x.shape[1:])
-        print("decoder output shape =", x.shape)
+        #print("decoder output shape =", x.shape)
         x = self.conv3(x)
         self.conv3.output_shape = tuple(x.shape[1:])
         x = self.bilinear(x)
         self.bilinear.output_shape = tuple(x.shape[1:])
-        print("output shape =", x.shape)
+        #print("output shape =", x.shape)
         self.output_shape = self.bilinear.output_shape
         return x

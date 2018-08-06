@@ -64,7 +64,8 @@ def image_type(image):
 def merge_ims_into_row(images: List[torch.cuda.FloatTensor],
                        rgbd_action: str = "both",
                        square: Optional[Union[Optional[SquareShape], List[
-                           Optional[SquareShape]]]] = None) -> np.ndarray:
+                           Optional[SquareShape]]]] = None,
+                       col_border_width: int = 5) -> np.ndarray:
     for image in images:
         assert image.dim(
         ) == 4, f"invalid number of dimensions, expected 4, i.e. (batch,channel,x,y), was {image.dim()} "
@@ -104,7 +105,14 @@ def merge_ims_into_row(images: List[torch.cuda.FloatTensor],
             if sq is not None:
                 paint_square(processed_image, sq)
 
-    im_row = np.hstack(tuple(processed_images))
+    border = np.zeros((3, 5, images[0].shape[4]))
+    borders = [border] * (len(processed_images) - 1)
+    processed_images_and_boarders = [np.empty()] * (
+        len(processed_images) + len(borders))
+    processed_images_and_boarders[::2] = processed_images
+    processed_images_and_boarders[1::2] = borders
+    im_row = np.hstack(tuple(processed_images_and_boarders))
+
     return im_row
 
 
@@ -121,7 +129,7 @@ ArgumentType = Union[Namespace, Dict[str, Any]]
 
 
 def get_output_dir(args: ArgumentType) -> str:
-    if isinstance(args,Namespace):
+    if isinstance(args, Namespace):
         args = vars(args)
     return os.path.join(
         args["output_dir"],

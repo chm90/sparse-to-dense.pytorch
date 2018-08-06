@@ -210,11 +210,11 @@ fieldnames = [
     "delta1 inside", 'delta1 outside', 'delta2', 'delta3', 'data_time',
     'gpu_time'
 ]
-best_result = Result()
-best_result.set_to_worst()
 
 
 def main() -> int:
+    best_result = Result()
+    best_result.set_to_worst()
     args: Any
     args = parser.parse_args()
     dataset = args.data
@@ -433,7 +433,6 @@ def main() -> int:
     train_results = []
     val_results = []
     for epoch in range(args.start_epoch, args.epochs):
-
         # train for one epoch
         res_train, res_train_inside, res_train_outside = train(
             train_loader, model, criterion, optimizer, epoch, args.print_freq,

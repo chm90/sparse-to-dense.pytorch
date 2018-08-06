@@ -33,7 +33,7 @@ data_names = ['nyudepthv2', "SUNRGBD"]
 rgbd_model_locations = {
     "no-skip":
     (r"results__newer/nyudepthv2.modality=rgb.arch=resnet50.skip=none.decoder=deconv3.criterion=l1."
-     r"lr=0.01.bs=16.opt=sgd.depth-type=low-quality-square.square-width=50/model_best.pth.tar"
+     r"lr=0.01.bs=16.opt=sgd.depth-type=square.square-width=50/model_best.pth.tar"
      ),
 }
 parser.add_argument(
@@ -89,7 +89,8 @@ def main() -> None:
         modality="rgbd",
         num_samples=0,
         square_width=args.square_width,
-        output_shape=image_shape)
+        output_shape=image_shape,
+        depth_type=args.depth_type)
     val_dataloader_rgbd = torch.utils.data.DataLoader(val_dataset_rgbd)
 
     depth_model_is_rgbd = depth_model.in_channels == 4
@@ -134,12 +135,7 @@ def main() -> None:
     ])
     ax1.set_xlabel("image")
 
-    if args.out_dir == None:
-        plt.show()
-    else:
-        if not os.path.isdir(args.out_dir):
-            os.makedirs(args.out_dir)
-        plt.savefig(os.path.join(args.out_dir, "difference_in_error.png"))
+    plt.savefig(os.path.join(depth_model_dir, "difference_in_error.png"))
 
     #plot images from high difference in error to low
 
@@ -159,7 +155,7 @@ def main() -> None:
             y_hat_rgb = rgb_model(x_rgbd  # type: ignore
                                   if rgb_model_is_rgbd else x_rgb)
             images = [x_rgbd,y,y_hat_depth,y_hat_rgb]
-            squares = [val_dataset_rgbd.square] * len(images)
+            squares = None if "single-pixel" in args.depth_type else [val_dataset_rgbd.square] * len(images)
             row = merge_ims_into_row(images,square=squares)
             im_merge = row if im_merge is None else add_row(im_merge, row)
         return im_merge
@@ -171,8 +167,6 @@ def main() -> None:
     print("depth_model_worst_im ratios =",
           ratio[decending_ratio_idxs[:args.imrows]])
 
-    if not os.path.isdir(args.out_dir):
-        os.makedirs(args.out_dir)
     save_image(depth_model_best_im,
                os.path.join(depth_model_dir, f"{args.depth_name}_best.png"))
     save_image(depth_model_worst_im,
