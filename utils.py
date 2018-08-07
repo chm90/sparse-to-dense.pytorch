@@ -5,7 +5,7 @@ import os
 cmap = plt.cm.jet
 import torch
 from itertools import chain, repeat
-from typing import List, Iterable, Callable, Union, Optional, Any, Dict, Type
+from typing import List, Iterable, Callable, Union, Optional, Any, Dict, Type, Tuple
 from dataloaders import SquareShape
 from argparse import Namespace
 
@@ -61,6 +61,16 @@ def image_type(image):
         return "d"
 
 
+def create_border(shape: Tuple[int, int],
+                  color: Tuple[int, int, int] = (255, 255, 255)) -> np.ndarray:
+    r, g, b = color
+    width, height = shape
+    border_channel = np.ones((width, height))
+    border = np.stack(
+        (border_channel * r, border_channel * g, border_channel * b), axis=2)
+    return border
+
+
 def merge_ims_into_row(images: List[torch.cuda.FloatTensor],
                        rgbd_action: str = "both",
                        square: Optional[Union[Optional[SquareShape], List[
@@ -105,19 +115,26 @@ def merge_ims_into_row(images: List[torch.cuda.FloatTensor],
             if sq is not None:
                 paint_square(processed_image, sq)
 
-    border = np.zeros((3, 5, images[0].shape[4]))
-    borders = [border] * (len(processed_images) - 1)
-    processed_images_and_boarders = [np.empty()] * (
+    border = create_border((images[0].shape[2], col_border_width))
+    borders = [border] * (
+        len(processed_images) - 1) if col_border_width > 0 else []
+    processed_images_and_boarders = [np.empty(0)] * (
         len(processed_images) + len(borders))
     processed_images_and_boarders[::2] = processed_images
-    processed_images_and_boarders[1::2] = borders
+    if col_border_width > 0:
+        processed_images_and_boarders[1::2] = borders
     im_row = np.hstack(tuple(processed_images_and_boarders))
-
     return im_row
 
 
-def add_row(img_merge, row):
-    return np.vstack([img_merge, row])
+def add_row(img_merge,
+            row,
+            row_border_width: int = 5,
+            border_color: Tuple[int, int, int] = (255, 255, 255)):
+    
+    border = create_border((row_border_width,row.shape[1]),border_color)
+    stack_ims = [img_merge, border, row]
+    return np.vstack([img_merge, border, row])
 
 
 def save_image(img_merge, filename):
