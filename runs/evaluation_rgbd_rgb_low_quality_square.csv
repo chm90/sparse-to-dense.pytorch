@@ -1,0 +1,9 @@
+--arch, --modality, --decoder, --skip-type, --optimizer, --epochs, -o, --depth-type, --square-width, --rgb-model-kind
+resnet50, rgbd, deconv3, sum, sgd, 30, results__newer, low-quality-square, 100, no-skip
+resnet50, rgbd, deconv3, none, sgd, 30, results__newer, low-quality-square, 100, no-skip
+resnet50, rgbd, deconv3, sum, sgd, 30, results__newer, low-quality-square, 50, no-skip
+resnet50, rgbd, deconv3, none, sgd, 30, results__newer, low-quality-square, 50, no-skip
+resnet50, rgbd, deconv3, sum, sgd, 30, results__newer, low-quality-square, 10, no-skip
+resnet50, rgbd, deconv3, none, sgd, 30, results__newer, low-quality-square, 10, no-skip
+resnet50, rgbd, deconv3, sum, sgd, 30, results__newer, single-pixel-low-quality, 50,  no-skip
+resnet50, rgbd, deconv3, none, sgd, 30, results__newer, single-pixel-low-quality, 50,  no-skip

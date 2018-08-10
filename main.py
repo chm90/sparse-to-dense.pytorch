@@ -5,7 +5,7 @@ import shutil
 import sys
 import time
 from sys import stdout
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 
 import numpy as np
 import torch
@@ -200,7 +200,9 @@ parser.add_argument(
     "--train-top-only",
     action="store_true",
     default=False,
-    help="if set, train only the top two layers. Only applies if aditionaly using --transfer-from")
+    help=
+    "if set, train only the top two layers. Only applies if aditionaly using --transfer-from"
+)
 
 fieldnames = [
     'mse', 'rmse', 'rmse inside', 'rmse outside', 'absrel', 'absrel inside',
@@ -208,11 +210,12 @@ fieldnames = [
     "delta1 inside", 'delta1 outside', 'delta2', 'delta3', 'data_time',
     'gpu_time'
 ]
-best_result = Result()
-best_result.set_to_worst()
+
 
 def main() -> int:
-    global args, best_result, output_directory, train_csv, test_csv
+    best_result = Result()
+    best_result.set_to_worst()
+    args: Any
     args = parser.parse_args()
     dataset = args.data
     if args.modality == 'rgb' and args.num_samples != 0:
@@ -302,7 +305,15 @@ def main() -> int:
         else:
             print("=> no best model found at '{}'".format(best_model_filename))
         avg_result, avg_result_inside, avg_result_outside, _, results, evaluator = validate(
-            val_loader, model, checkpoint['epoch'], write_to_file=False)
+            val_loader,
+            args.square_width,
+            args.modality,
+            output_directory,
+            args.print_freq,
+            test_csv,
+            model,
+            checkpoint['epoch'],
+            write_to_file=False)
         write_results(best_txt, avg_result, avg_result_inside,
                       avg_result_outside, checkpoint['epoch'])
         for loss_name, losses in [
@@ -319,11 +330,15 @@ def main() -> int:
             ("maes_inside", (res.result_inside.mae for res in results)),
             ("absrels_inside", (res.result_inside.absrel for res in results)),
             ("rmses_outside", (res.result_outside.rmse for res in results)),
-            ("delta1s_outside", (res.result_outside.delta1 for res in results)),
-            ("delta2s_outside", (res.result_outside.delta2 for res in results)),
-            ("delta3s_outside", (res.result_outside.delta3 for res in results)),
+            ("delta1s_outside",
+             (res.result_outside.delta1 for res in results)),
+            ("delta2s_outside",
+             (res.result_outside.delta2 for res in results)),
+            ("delta3s_outside",
+             (res.result_outside.delta3 for res in results)),
             ("maes_outside", (res.result_outside.mae for res in results)),
-            ("absrels_outside", (res.result_outside.absrel for res in results)),
+            ("absrels_outside",
+             (res.result_outside.absrel for res in results)),
         ]:
             with open(
                     os.path.join(output_directory,
@@ -418,14 +433,15 @@ def main() -> int:
     train_results = []
     val_results = []
     for epoch in range(args.start_epoch, args.epochs):
-
         # train for one epoch
         res_train, res_train_inside, res_train_outside = train(
-            train_loader, model, criterion, optimizer, epoch)
+            train_loader, model, criterion, optimizer, epoch, args.print_freq,
+            train_csv)
         train_results.append((res_train, res_train_inside, res_train_outside))
         # evaluate on validation set
         res_val, res_val_inside, res_val_outside, img_merge, _, _ = validate(
-            val_loader, model, epoch, True)
+            val_loader, args.square_width, args.modality, output_directory,
+            args.print_freq, test_csv, model, epoch, True)
         val_results.append((res_val, res_val_inside, res_val_outside))
         # remember best rmse and save checkpoint
         is_best = res_val.rmse < best_result.rmse
@@ -446,9 +462,9 @@ def main() -> int:
             'model': model,
             'best_result': best_result,
             'optimizer': optimizer,
-        }, is_best, epoch)
+        }, is_best, epoch, output_directory)
 
-        plot_progress(train_results, val_results, epoch)
+        plot_progress(train_results, val_results, epoch, output_directory)
 
         if epochs_since_best > args.early_stop_epochs:
             print("early stopping")
@@ -469,8 +485,8 @@ def write_results(txt: str, res: Result, res_inside: Result,
         txtfile.write(f"epoch: {epoch}")
 
 
-def train(train_loader, model, criterion, optimizer,
-          epoch) -> Tuple[Result, Result, Result]:
+def train(train_loader, model, criterion, optimizer, epoch, print_freq,
+          train_csv) -> Tuple[Result, Result, Result]:
     average_meter = AverageMeter()
     inside_average_meter = AverageMeter()
     outside_average_meter = AverageMeter()
@@ -506,11 +522,11 @@ def train(train_loader, model, criterion, optimizer,
         average_meter.update(result.result, gpu_time, data_time, input.size(0))
         inside_average_meter.update(result.result_inside, gpu_time, data_time,
                                     input.size(0))
-        outside_average_meter.update(result.result_outside, gpu_time, data_time,
-                                     input.size(0))
+        outside_average_meter.update(result.result_outside, gpu_time,
+                                     data_time, input.size(0))
         end = time.time()
 
-        if (i + 1) % args.print_freq == 0:
+        if (i + 1) % print_freq == 0:
             #print('=> output: {}'.format(output_directory))
             def print_result(result, result_name, averege_meter):
                 average = averege_meter.average()
@@ -527,7 +543,8 @@ def train(train_loader, model, criterion, optimizer,
                     '\n')
 
             print_result(result.result, "result", average_meter)
-            print_result(result.result_inside, "result_inside", inside_average_meter)
+            print_result(result.result_inside, "result_inside",
+                         inside_average_meter)
             print_result(result.result_outside, "result_outside",
                          outside_average_meter)
     avg = average_meter.average()
@@ -558,12 +575,18 @@ def train(train_loader, model, criterion, optimizer,
     return avg, avg_inside, avg_outside
 
 
-def validate(val_loader,
-             model: torch.nn.Module,
-             epoch: int,
-             write_to_file: bool = True
-             ) -> typing.Tuple[Result, Result, Result, np.array, typing.List[
-                 MaskedResult], evaluate.Evaluator]:
+def validate(
+        val_loader,
+        square_width,
+        modality,
+        output_directory,
+        print_freq,
+        test_csv,
+        model: torch.nn.Module,
+        epoch: int,
+        write_to_file: bool = True,
+) -> typing.Tuple[Result, Result, Result, np.array, typing.List[MaskedResult],
+                  evaluate.Evaluator]:
     average_meter = AverageMeter()
     inside_average_meter = AverageMeter()
     outside_average_meter = AverageMeter()
@@ -571,13 +594,12 @@ def validate(val_loader,
     # switch to evaluate mode
     model.eval()
     evaluator = evaluate.Evaluator(val_loader.dataset.output_shape,
-                                   args.square_width)
+                                   square_width)
     end = time.time()
     results = []
     for i, (input, target) in enumerate(val_loader):
         input, target = input.cuda(), target.cuda()
         input_var = torch.autograd.Variable(input)
-        target_var = torch.autograd.Variable(target)
         torch.cuda.synchronize()
         data_time = time.time() - end
 
@@ -597,25 +619,27 @@ def validate(val_loader,
         average_meter.update(result.result, gpu_time, data_time, input.size(0))
         inside_average_meter.update(result.result_inside, gpu_time, data_time,
                                     input.size(0))
-        outside_average_meter.update(result.result_outside, gpu_time, data_time,
-                                     input.size(0))
+        outside_average_meter.update(result.result_outside, gpu_time,
+                                     data_time, input.size(0))
         end = time.time()
         # save 8 images for visualization
         skip = 50
-        if args.modality == 'd':
+        if modality == 'd':
             img_merge = None
         else:
             if i == 0:
-                img_merge = utils.merge_ims_into_row([input, target, depth_pred],rgbd_action="both")
+                img_merge = utils.merge_ims_into_row(
+                    [input, target, depth_pred], rgbd_action="both")
             elif (i < 8 * skip) and (i % skip == 0):
-                row = utils.merge_ims_into_row([input, target, depth_pred],rgbd_action="both")
+                row = utils.merge_ims_into_row(
+                    [input, target, depth_pred], rgbd_action="both")
                 img_merge = utils.add_row(img_merge, row)
             elif i == 8 * skip:
                 filename = output_directory + '/comparison_' + str(
                     epoch) + '.png'
                 utils.save_image(img_merge, filename)
         average = average_meter.average()
-        if (i + 1) % args.print_freq == 0:
+        if (i + 1) % print_freq == 0:
             #print('=> output: {}'.format(output_directory))
             def print_result(result, result_name):
                 stdout.write(
@@ -629,7 +653,8 @@ def validate(val_loader,
                     #f'REL={result.absrel:.3f}({average.absrel:.3f}) '
                     #f'Lg10={result.lg10:.3f}({average.lg10:.3f}) \n'
                     '\n')
-            print_result(result.result,"result")
+
+            print_result(result.result, "result")
 
     avg = average_meter.average()
     avg_inside = inside_average_meter.average()
@@ -671,7 +696,8 @@ def validate(val_loader,
     return avg, avg_inside, avg_outside, img_merge, results, evaluator
 
 
-def save_checkpoint(state, is_best, epoch):
+def save_checkpoint(state: Dict[str, Any], is_best: bool, epoch: int,
+                    output_directory: str) -> None:
     checkpoint_filename = os.path.join(output_directory,
                                        'checkpoint-' + str(epoch) + '.pth.tar')
     torch.save(state, checkpoint_filename)
@@ -686,8 +712,7 @@ def save_checkpoint(state, is_best, epoch):
 
 
 def plot_progress(train_results: ResultListT, val_results: ResultListT,
-                  epoch: int) -> None:
-    global output_directory
+                  epoch: int, output_directory: str) -> None:
     plt.figure()
     rmse_train = np.array(
         [train_result.rmse for train_result, _, _ in train_results])

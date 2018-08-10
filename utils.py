@@ -4,9 +4,11 @@ from PIL import Image
 import os
 cmap = plt.cm.jet
 import torch
-from itertools import chain
-from typing import List, Iterable, Callable
+from itertools import chain, repeat
+from typing import List, Iterable, Callable, Union, Optional, Any, Dict, Type, Tuple
 from dataloaders import SquareShape
+from argparse import Namespace
+
 
 def process_depth(depth: torch.Tensor, depth_bias: float,
                   scale: float) -> np.ndarray:
@@ -20,7 +22,7 @@ def process_rgb(rgb: torch.Tensor) -> np.ndarray:
     return 255 * np.transpose(np.squeeze(rgb.cpu().numpy()), (1, 2, 0))
 
 
-def paint_square(image: np.ndarray, square : SquareShape) -> np.ndarray:
+def paint_square(image: np.ndarray, square: SquareShape) -> np.ndarray:
     xmin, xmax, ymin, ymax = square
     image[xmin:xmax, ymin - 1:ymin + 1, :] = 255
     image[xmin:xmax, ymax - 1:ymax + 1, :] = 255
@@ -59,13 +61,24 @@ def image_type(image):
         return "d"
 
 
+def create_border(shape: Tuple[int, int],
+                  color: Tuple[int, int, int] = (255, 255, 255)) -> np.ndarray:
+    r, g, b = color
+    width, height = shape
+    border_channel = np.ones((width, height))
+    border = np.stack(
+        (border_channel * r, border_channel * g, border_channel * b), axis=2)
+    return border
+
+
 def merge_ims_into_row(images: List[torch.cuda.FloatTensor],
                        rgbd_action: str = "both",
-                       images_with_square= None,
-                       square:SquareShape = None) -> np.ndarray:
+                       square: Optional[Union[Optional[SquareShape], List[
+                           Optional[SquareShape]]]] = None,
+                       col_border_width: int = 5) -> np.ndarray:
     for image in images:
         assert image.dim(
-        ) == 4, f"invalid number of dimensions, expected 4, was {image.dim()} "
+        ) == 4, f"invalid number of dimensions, expected 4, i.e. (batch,channel,x,y), was {image.dim()} "
 
     rgbd_selector: Callable[[torch.cuda.FloatTensor], Iterable[
         torch.cuda.FloatTensor]]
@@ -77,32 +90,51 @@ def merge_ims_into_row(images: List[torch.cuda.FloatTensor],
         rgbd_selector = lambda rgbd: [rgbd[:, :3, :, :]]
     else:
         raise ValueError(f"invalid rgbd_action {rgbd_action}")
-    images_np_iter = chain.from_iterable(
-        rgbd_selector(image) if image_type(image) == "rgbd" else [image]
-        for image in images)
-    images_np = list(images_np_iter)
+
+    images_np = list(
+        chain.from_iterable(
+            rgbd_selector(image) if image_type(image) == "rgbd" else [image]
+            for image in images))
+
     depth_images = list(filter(lambda im: image_type(im) == "d", images_np))
     depth_bias = min(map(lambda d_im: float(d_im.min()), depth_images))
     depth_scale = max(
         map(lambda d_im: float(d_im.max() - d_im.min()), depth_images))
 
-    processed_images = list(map(
-        lambda im: process_depth(im, depth_bias, depth_scale) if image_type(im) == "d" else process_rgb(im),
-        images_np))
+    processed_images = list(
+        map(lambda im: process_depth(im, depth_bias, depth_scale) if image_type(im) == "d" else process_rgb(im),
+            images_np))
 
     if square is not None:
-        for image_with_square,processed_image in zip(images_with_square,processed_images):
-            if image_with_square:
-                paint_square(processed_image,square)
-    elif images_with_square is not None:
-        raise ValueError(f"Must define 'images_with_square' if 'square' is given. images_with_square: {images_with_square}")
+        squares: Iterable[SquareShape]
+        if isinstance(square, List):
+            squares = square
+        else:
+            squares = repeat(square)
+        for sq, processed_image in zip(squares, processed_images):
+            if sq is not None:
+                paint_square(processed_image, sq)
 
-    im_row = np.hstack(tuple(processed_images))
+    border = create_border((images[0].shape[2], col_border_width))
+    borders = [border] * (
+        len(processed_images) - 1) if col_border_width > 0 else []
+    processed_images_and_boarders = [np.empty(0)] * (
+        len(processed_images) + len(borders))
+    processed_images_and_boarders[::2] = processed_images
+    if col_border_width > 0:
+        processed_images_and_boarders[1::2] = borders
+    im_row = np.hstack(tuple(processed_images_and_boarders))
     return im_row
 
 
-def add_row(img_merge, row):
-    return np.vstack([img_merge, row])
+def add_row(img_merge,
+            row,
+            row_border_width: int = 5,
+            border_color: Tuple[int, int, int] = (255, 255, 255)):
+    
+    border = create_border((row_border_width,row.shape[1]),border_color)
+    stack_ims = [img_merge, border, row]
+    return np.vstack([img_merge, border, row])
 
 
 def save_image(img_merge, filename):
@@ -110,11 +142,16 @@ def save_image(img_merge, filename):
     img_merge.save(filename)
 
 
-def get_output_dir(args):
+ArgumentType = Union[Namespace, Dict[str, Any]]
+
+
+def get_output_dir(args: ArgumentType) -> str:
+    if isinstance(args, Namespace):
+        args = vars(args)
     return os.path.join(
-        args.output_dir,
-        f'{args.data}.modality={args.modality}.arch={args.arch}'
-        f'.skip={args.skip_type}.decoder={args.decoder}'
-        f'.criterion={args.criterion}.lr={args.lr}.bs={args.batch_size}'
-        f'.opt={args.optimizer}.depth-type={args.depth_type}'
-        f'.square-width={args.square_width}')
+        args["output_dir"],
+        f'{args["data"]}.modality={args["modality"]}.arch={args["arch"]}'
+        f'.skip={args["skip_type"]}.decoder={args["decoder"]}'
+        f'.criterion={args["criterion"]}.lr={args["lr"]}.bs={args["batch_size"]}'
+        f'.opt={args["optimizer"]}.depth-type={args["depth_type"]}'
+        f'.square-width={args["square_width"]}')
