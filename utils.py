@@ -117,12 +117,11 @@ def merge_ims_into_row(images: List[torch.cuda.FloatTensor],
 
     border = create_border((images[0].shape[2], col_border_width))
     borders = [border] * (
-        len(processed_images) - 1) if col_border_width > 0 else []
+        len(processed_images) + 1)
     processed_images_and_boarders = [np.empty(0)] * (
         len(processed_images) + len(borders))
-    processed_images_and_boarders[::2] = processed_images
-    if col_border_width > 0:
-        processed_images_and_boarders[1::2] = borders
+    processed_images_and_boarders[1::2] = processed_images
+    processed_images_and_boarders[::2] = borders
     im_row = np.hstack(tuple(processed_images_and_boarders))
     return im_row
 
