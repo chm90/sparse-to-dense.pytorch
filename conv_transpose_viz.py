@@ -59,39 +59,40 @@ def main():
         "padding": 1,
         "output_padding": 1
     }]
-    
-    def gridspecsi(n_params : int) -> Iterator[gridspec.Gridspec]:
+
+    def subplot_specsi(n_plots : int) -> Iterator[gridspec.SubplotSpec]:
         cols = 3
-        rows = ceil(n_params + 1 / cols)
-        last_row_cols = cols - (cols * rows - n_params)
-        gs = gridspec.Gridspec(rows,cols * 2)
+        rows = ceil(n_plots / cols)
+        last_row_cols = cols - (cols * rows - n_plots)
+        gs = gridspec.GridSpec(rows,cols * 2)
         for row in range(rows - 1):
             for col in range(cols):
                 col_grid = col * 2
-                yield gs[row,col_grid:col_grid + 2]
+                col_slice = slice(col_grid,col_grid + 2)
+                subplotspec = gs[row,col_slice]
+                yield subplotspec
         if last_row_cols == 1:
             col_ = floor(cols / 2)
-            yield gs[col_:col_ + 2]
+            yield gs[-1,col_:col_ + 2]
         elif last_row_cols == 2:
-            col1_ = slice(1,3)
-            col2_ = slice(3,5)
-            yield gs[col1_: col1_ + 2]
-            yield gs[col2_: col2_ + 2]
+            col1_slice = slice(1,3)
+            col2_slice = slice(3,5)
+            yield gs[-1,col1_slice]
+            yield gs[-1,col2_slice]
         elif last_row_cols == 3:
             raise NotImplementedError("Implement meeeee")
 
-    fig = plt.figure()
-    ax1 = plt.subplot()
-    fig, [ax1, *axes] = plt.subplots(1, len(params) + 1)
+    subplotspecsi = subplot_specsi(len(params) + 1)
+    ax1 = plt.subplot(next(subplotspecsi))
     ax1.imshow(X[0, 0, ...].data)
     ax1.set_title("X")
     ax1.set_xlabel(f"{X.shape[2]} px")
     ax1.set_ylabel(f"{X.shape[3]} px")
     ax1.set_xticklabels([])
     ax1.set_yticklabels([])
-    gridspecsi()
 
-    for ax, conv_params in zip(axes, params):
+    for conv_params, subplot_spec in zip(params,subplotspecsi):
+        ax = plt.subplot(subplot_spec)
         plot_convt_output(X, ax, **conv_params)
 
     plt.show()
